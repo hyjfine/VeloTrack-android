@@ -1,0 +1,38 @@
+# --- OS ---
+.DS_Store
+
+# --- IDE / project files ---
+.idea/
+*.iml
+
+# --- Gradle / Kotlin ---
+/.gradle
+.kotlin/
+**/build/
+
+# --- Android local config & generated native files ---
+/captures/
+/local.properties
+.cxx/
+.externalNativeBuild/
+
+# --- Flutter AAR output in this host project ---
+/flutter_aar/
+
+# --- Flutter generated files (defensive) ---
+GeneratedPluginRegistrant.java
+.flutter-plugins
+.flutter-plugins-dependencies
+.dart_tool/
+.packages
+.pub/
+.pub-cache/
+
+# --- Logs ---
+*.log
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks
