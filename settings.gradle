@@ -9,38 +9,15 @@ pluginManagement {
     }
 }
 
-// Same integration pattern as qiqixue-reading-maniac-android/settings.gradle
-def props = new Properties()
-file("gradle.properties").withInputStream { props.load(it) }
-def useFlutterSource = props.getProperty("useFlutterSource", "true").toBoolean()
-
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         maven { url = uri("https://maven.aliyun.com/repository/google") }
         maven { url = uri("https://maven.aliyun.com/repository/central") }
-        maven { url = uri("https://storage.flutter-io.cn/download.flutter.io") }
         google()
         mavenCentral()
-        if (!useFlutterSource) {
-            def flutterAarRepo = new File(settingsDir, "flutter_aar/host/outputs/repo")
-            if (flutterAarRepo.exists()) {
-                maven { url = uri(flutterAarRepo) }
-            }
-        }
     }
 }
 
 rootProject.name = "VeloTrack"
 include(":app")
-
-if (useFlutterSource) {
-    def flutterModulePath = new File(settingsDir, "../VeloTrack-flutter")
-    def includeFlutter = new File(flutterModulePath, ".android/include_flutter.groovy")
-    if (includeFlutter.exists()) {
-        setBinding(new Binding([gradle: this]))
-        evaluate(includeFlutter)
-    }
-    include(":flutter_module")
-    project(":flutter_module").projectDir = flutterModulePath
-}

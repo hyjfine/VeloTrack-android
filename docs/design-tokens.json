@@ -1,0 +1,72 @@
+{
+  "$schema": "./design-tokens.schema.json",
+  "version": "1.0.0",
+  "color": {
+    "background":  "#F4F4F7",
+    "foreground":  "#1A1A1A",
+    "accent":      "#E2FF3B",
+    "accentGlow":  "rgba(226,255,59,0.3)",
+    "warn":        "#F97316",
+    "danger":      "#EF4444",
+    "mapBg":       "#151619",
+    "polyline":    "#E2FF3B",
+    "mutedText":   "#B4B4BA",
+    "divider":     "#F0F0F2",
+    "white":       "#FFFFFF",
+    "overlay":     "rgba(0,0,0,0.4)"
+  },
+  "radius": {
+    "sm":  16,
+    "md":  24,
+    "lg":  32,
+    "xl":  40,
+    "xxl": 48,
+    "full": 9999
+  },
+  "spacing": {
+    "bottomNavReserve": 160,
+    "gaugeBottom":      128,
+    "hudTop":           48,
+    "sidePadding":      24
+  },
+  "font": {
+    "sans":    "Inter",
+    "mono":    "JetBrains Mono",
+    "numeric": { "family": "Inter", "features": ["tnum"] }
+  },
+  "typography": {
+    "displayL": { "size": 56, "weight": 700, "tracking": -0.02 },
+    "displayM": { "size": 36, "weight": 700, "tracking": -0.02 },
+    "title":    { "size": 36, "weight": 700, "tracking": -0.01 },
+    "cardTitle":{ "size": 18, "weight": 700, "tracking": -0.01 },
+    "stat":     { "size": 24, "weight": 700, "tracking": -0.01 },
+    "duration": { "size": 24, "weight": 700, "tracking":  0.00 },
+    "labelS":   { "size":  9, "weight": 900, "tracking":  0.22, "uppercase": true },
+    "labelM":   { "size": 10, "weight": 700, "tracking":  0.18, "uppercase": true },
+    "body":     { "size": 14, "weight": 400, "tracking":  0.00 }
+  },
+  "motion": {
+    "enterFade":   { "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
+    "enterSlideX": { "xFrom": 20, "xTo": 0, "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
+    "exitSlideX":  { "xFrom":  0, "xTo": -20, "opacityFrom": 1, "opacityTo": 0, "durationMs": 300 },
+    "enterSlideY": { "yFrom": 20, "yTo": 0, "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
+    "staggerSmallMs": 50,
+    "staggerLargeMs": 100,
+    "longPressMs":    1500,
+    "pressScaleButton": 0.90,
+    "pressScaleCard":   0.97
+  },
+  "map": {
+    "tileUrl": "https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png",
+    "defaultZoom": 16,
+    "detailZoom":  14,
+    "tileOpacity": 0.9,
+    "polylineWeight": 5,
+    "polylineOpacity": 0.9
+  },
+  "thresholds": {
+    "gpsAccuracyDiscardM": 40,
+    "gpsSignalLostSec":    10,
+    "aiAnalyzeCooldownMs": 60000
+  }
+}

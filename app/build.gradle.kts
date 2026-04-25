@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
 
@@ -26,7 +27,13 @@ android {
 
 
         val geminiKey = (project.findProperty("GEMINI_API_KEY") as String?) ?: ""
+        val googleMapsKey = (project.findProperty("GOOGLE_MAPS_API_KEY") as String?) ?: ""
+        val amapKey = (project.findProperty("AMAP_API_KEY") as String?) ?: ""
         buildConfigField("String", "GEMINI_API_KEY", "\"${geminiKey.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${googleMapsKey.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "AMAP_API_KEY", "\"${amapKey.replace("\"", "\\\"")}\"")
+        manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = googleMapsKey
+        manifestPlaceholders["AMAP_API_KEY"] = amapKey
     }
 
     buildTypes {
@@ -41,18 +48,30 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 }
 
-val useFlutterSource: String by project
-
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation(platform("androidx.compose:compose-bom:2025.01.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-maps:19.0.0")
+    implementation("com.google.maps.android:maps-compose:6.4.0")
+    implementation("com.amap.api:3dmap:latest.integration")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
@@ -60,10 +79,6 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    if (useFlutterSource.toBoolean()) {
-        implementation(project(":flutter"))
-    } else {
-        // Matches output of `flutter build aar` for this module (see pubspec module.androidPackage).
-        implementation("com.velotrack.flutter_module:flutter_release:1.0")
-    }
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
