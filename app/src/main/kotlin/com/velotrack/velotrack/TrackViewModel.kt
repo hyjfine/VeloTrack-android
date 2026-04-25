@@ -161,6 +161,21 @@ class TrackViewModel(
         }
     }
 
+    fun restoreLastLocation(point: GpsPoint) {
+        if (point.accuracy > 40.0) return
+        _uiState.update { s ->
+            if (s.isRecording) {
+                s
+            } else {
+                s.copy(
+                    mapCenterLat = point.lat,
+                    mapCenterLng = point.lng,
+                    currentAltitude = point.altitude,
+                )
+            }
+        }
+    }
+
     fun loadHistory() {
         viewModelScope.launch(Dispatchers.IO) {
             val rides = repo.listRides()

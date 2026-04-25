@@ -1,20 +1,26 @@
 package com.velotrack.velotrack
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInVertically
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -85,6 +91,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
@@ -113,22 +120,27 @@ fun VeloMainScreen(
     onBackDetail: () -> Unit,
 ) {
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    BackHandler(enabled = state.view == AppView.DETAIL) {
+        onBackDetail()
+    }
     Box(Modifier.fillMaxSize().background(VeloColors.background)) {
-        AnimatedContent(
-            targetState = state.view,
-            transitionSpec = {
-                when {
-                    initialState == AppView.RECORDING || targetState == AppView.RECORDING ->
-                        fadeIn(tween(300)) togetherWith fadeOut(tween(300))
-                    else ->
-                        (slideInHorizontally(tween(300)) { it / 5 } + fadeIn(tween(300))) togetherWith
-                            (slideOutHorizontally(tween(300)) { -it / 5 } + fadeOut(tween(300)))
-                }
-            },
-            label = "root_view",
-        ) { view ->
-            when (view) {
-                AppView.RECORDING -> RecordingScreen(
+        if (state.view == AppView.DETAIL && state.selectedRide != null) {
+            DetailScreen(
+                ride = state.selectedRide,
+                state = state,
+                provider = provider,
+                navBottom = navBottom,
+                onBack = onBackDetail,
+                onAnalyze = onAnalyze,
+            )
+        } else {
+            val dashParallaxX by animateDpAsState(
+                targetValue = if (state.view == AppView.HISTORY) (-18).dp else 0.dp,
+                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                label = "dash_parallax_x",
+            )
+            Box(Modifier.offset(x = dashParallaxX)) {
+                RecordingScreen(
                     state = state,
                     provider = provider,
                     navBottom = navBottom,
@@ -138,27 +150,20 @@ fun VeloMainScreen(
                     onBeginHold = onBeginHold,
                     onEndHold = onEndHold,
                 )
-                AppView.HISTORY -> HistoryScreen(
+            }
+            AnimatedVisibility(
+                visible = state.view == AppView.HISTORY,
+                modifier = Modifier.fillMaxSize(),
+                enter = slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 8 } + fadeIn(tween(180)),
+                exit = slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { it / 8 } + fadeOut(tween(160)),
+                label = "history_overlay",
+            ) {
+                HistoryScreen(
                     state = state,
                     navBottom = navBottom,
                     onOpenRide = onOpenRide,
                     onRequestDelete = onRequestDelete,
                 )
-                AppView.DETAIL -> {
-                    val ride = state.selectedRide
-                    if (ride != null) {
-                        DetailScreen(
-                            ride = ride,
-                            state = state,
-                            provider = provider,
-                            navBottom = navBottom,
-                            onBack = onBackDetail,
-                            onAnalyze = onAnalyze,
-                        )
-                    } else {
-                        Box(Modifier.fillMaxSize())
-                    }
-                }
             }
         }
 
@@ -231,12 +236,10 @@ private fun RecordingScreen(
             modifier = Modifier.fillMaxSize(),
             followLatestPosition = true,
             mapZoom = 16f,
-            polylineWidth = 5f,
-        )
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(VeloColors.foreground.copy(alpha = 0.18f)),
+            polylineWidth = 7f,
+            darkMode = true,
+            centerLat = state.mapCenterLat,
+            centerLng = state.mapCenterLng,
         )
         Row(
             Modifier
@@ -379,21 +382,20 @@ private fun MainGaugeCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "SPEED",
-                        style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.2f)),
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "SPEED",
+                            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.22f)),
+                        )
+                        Text(
+                            "KPH",
+                            style = tabularTextStyle(8.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.18f)),
+                        )
+                    }
                     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
                         Text(
                             text = formatSpeedKmh(if (state.isPaused) 0.0 else state.currentSpeedMps),
                             style = tabularTextStyle(36.sp, FontWeight.Bold, VeloColors.foreground),
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                        Text(
-                            " KPH",
-                            style = tabularTextStyle(10.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.2f)),
-                            modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
                             maxLines = 1,
                             softWrap = false,
                         )
@@ -464,19 +466,20 @@ private fun MainGaugeCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "ALTITUDE",
-                        style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.2f)),
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "ALTITUDE",
+                            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.22f)),
+                        )
+                        Text(
+                            "M",
+                            style = tabularTextStyle(8.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.18f)),
+                        )
+                    }
                     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
                         Text(
                             text = (state.currentAltitude ?: 0.0).toInt().toString(),
                             style = tabularTextStyle(30.sp, FontWeight.Bold, VeloColors.foreground),
-                        )
-                        Text(
-                            " M",
-                            style = tabularTextStyle(10.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.2f)),
-                            modifier = Modifier.padding(start = 2.dp, bottom = 4.dp),
                         )
                     }
                 }
@@ -495,9 +498,10 @@ private fun HistoryScreen(
     Column(
         Modifier
             .fillMaxSize()
+            .background(VeloColors.background)
             .statusBarsPadding()
-            .padding(horizontal = 32.dp)
-            .padding(top = 32.dp, bottom = VeloDimens.bottomNavReserve.dp + navBottom),
+            .padding(horizontal = VeloDimens.sidePadding.dp)
+            .padding(top = 32.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
@@ -521,31 +525,45 @@ private fun HistoryScreen(
         }
         Spacer(Modifier.height(48.dp))
         if (state.history.isEmpty()) {
-            Column(
-                Modifier
+            Card(
+                shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
+                colors = CardDefaults.cardColors(containerColor = VeloColors.white),
+                border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
+                modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(VeloDimens.radiusXl.dp))
-                    .background(VeloColors.white)
-                    .padding(vertical = 128.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusXl.dp)),
             ) {
-                Icon(
-                    Icons.Outlined.Navigation,
-                    contentDescription = null,
-                    tint = VeloColors.foreground.copy(alpha = 0.05f),
-                    modifier = Modifier.size(64.dp),
-                )
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    "WAITING FOR YOUR FIRST RIDE",
-                    style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.3f), letterSpacing = 3.sp),
-                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 128.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        Icons.Outlined.Navigation,
+                        contentDescription = null,
+                        tint = VeloColors.foreground.copy(alpha = 0.05f),
+                        modifier = Modifier.size(64.dp),
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        "WAITING FOR YOUR FIRST RIDE",
+                        style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.3f), letterSpacing = 3.sp),
+                    )
+                }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                itemsIndexed(state.history, key = { _, r -> r.id }) { _, ride ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(bottom = VeloDimens.bottomNavReserve.dp + navBottom),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                itemsIndexed(state.history, key = { _, r -> r.id }) { index, ride ->
                     HistoryRideRow(
                         ride = ride,
+                        index = index,
                         onOpen = { onOpenRide(ride) },
                         onDelete = { onRequestDelete(ride.id) },
                     )
@@ -558,64 +576,120 @@ private fun HistoryScreen(
 @Composable
 private fun HistoryRideRow(
     ride: Ride,
+    index: Int,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
-        shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.white),
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusLg.dp))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen() },
-        border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
+    var visible by remember(ride.id) { androidx.compose.runtime.mutableStateOf(false) }
+    LaunchedEffect(ride.id) {
+        delay(index * 50L)
+        visible = true
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(300, easing = FastOutSlowInEasing)) { 20 } + fadeIn(tween(300)),
     ) {
-        Row(
-            Modifier.padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+        val cardInteraction = remember { MutableInteractionSource() }
+        val cardPressed by cardInteraction.collectIsPressedAsState()
+        val cardScale by animateFloatAsState(
+            targetValue = if (cardPressed) 0.97f else 1f,
+            animationSpec = tween(140, easing = FastOutSlowInEasing),
+            label = "history_card_press_scale",
+        )
+        val iconBg by animateColorAsState(
+            targetValue = if (cardPressed) VeloColors.foreground else VeloColors.background,
+            animationSpec = tween(140, easing = FastOutSlowInEasing),
+            label = "history_icon_bg",
+        )
+        val iconTint by animateColorAsState(
+            targetValue = if (cardPressed) VeloColors.accent else VeloColors.gray300,
+            animationSpec = tween(140, easing = FastOutSlowInEasing),
+            label = "history_icon_tint",
+        )
+        val titleParts = remember(ride.title) {
+            val prefix = "Ride on "
+            if (ride.title.startsWith(prefix)) {
+                prefix.trimEnd() to ride.title.removePrefix(prefix)
+            } else {
+                ride.title to null
+            }
+        }
+        Card(
+            shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
+            colors = CardDefaults.cardColors(containerColor = VeloColors.white),
+            modifier = Modifier
+                .fillMaxWidth()
+                .scale(cardScale)
+                .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusLg.dp))
+                .clickable(interactionSource = cardInteraction, indication = null) { onOpen() },
+            border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(VeloDimens.radiusMd.dp))
-                        .background(VeloColors.background),
-                    contentAlignment = Alignment.Center,
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Outlined.History, null, tint = VeloColors.mutedText, modifier = Modifier.size(24.dp))
-                }
-                Spacer(Modifier.width(20.dp))
-                Column {
-                    Text(ride.title, style = tabularTextStyle(18.sp, FontWeight.Bold, VeloColors.gray900, (-0.2).sp))
-                    Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Box(
+                        Modifier
+                            .size(56.dp)
+                            .clip(RoundedCornerShape(VeloDimens.radiusMd.dp))
+                            .background(iconBg),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.History, null, tint = iconTint, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.width(20.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            formatDistanceMeters(ride.totalDistance),
-                            style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f)),
+                            titleParts.first,
+                            style = tabularTextStyle(18.sp, FontWeight.Bold, VeloColors.gray900, (-0.2).sp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Text(
-                            formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
-                            style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f)),
-                        )
+                        titleParts.second?.let { date ->
+                            Text(
+                                date,
+                                style = tabularTextStyle(18.sp, FontWeight.Bold, VeloColors.gray900, (-0.2).sp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text(
+                                formatDistanceMeters(ride.totalDistance).uppercase(Locale.US),
+                                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
+                            )
+                            Text(
+                                formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
+                                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
+                            )
+                        }
                     }
                 }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(
-                    Icons.Outlined.DeleteOutline,
-                    contentDescription = "Delete",
-                    tint = VeloColors.gray300,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clickable { onDelete() }
-                        .padding(10.dp),
-                )
-                Icon(
-                    Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = VeloColors.gray300,
-                    modifier = Modifier.size(20.dp),
-                )
+                Spacer(Modifier.width(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(
+                        Icons.Outlined.DeleteOutline,
+                        contentDescription = "Delete",
+                        tint = VeloColors.gray300,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clickable { onDelete() }
+                            .padding(10.dp),
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = VeloColors.gray300,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
     }
@@ -949,11 +1023,11 @@ private fun BottomNavBar(
             NavItem(
                 label = "Dash",
                 selected = view == AppView.RECORDING,
-                icon = { selected ->
+                icon = { color ->
                     Icon(
                         Icons.AutoMirrored.Outlined.ShowChart,
                         null,
-                        tint = if (selected) VeloColors.foreground else VeloColors.gray300,
+                        tint = color,
                         modifier = Modifier.size(24.dp),
                     )
                 },
@@ -962,11 +1036,11 @@ private fun BottomNavBar(
             NavItem(
                 label = "Log",
                 selected = logActive,
-                icon = { selected ->
+                icon = { color ->
                     Icon(
                         Icons.Outlined.History,
                         null,
-                        tint = if (selected) VeloColors.foreground else VeloColors.gray300,
+                        tint = color,
                         modifier = Modifier.size(24.dp),
                     )
                 },
@@ -980,22 +1054,32 @@ private fun BottomNavBar(
 private fun NavItem(
     label: String,
     selected: Boolean,
-    icon: @Composable (Boolean) -> Unit,
+    icon: @Composable (Color) -> Unit,
     onClick: () -> Unit,
 ) {
+    val selectionScale by animateFloatAsState(
+        targetValue = if (selected) 1.1f else 1f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "nav_item_scale",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) VeloColors.foreground else VeloColors.gray300,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "nav_item_color",
+    )
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable { onClick() }
             .padding(horizontal = 24.dp),
     ) {
-        Box(Modifier.scale(if (selected) 1.1f else 1f)) {
-            icon(selected)
+        Box(Modifier.scale(selectionScale)) {
+            icon(contentColor)
         }
         Spacer(Modifier.height(4.dp))
         Text(
             label.uppercase(Locale.US),
-            style = tabularTextStyle(10.sp, FontWeight.Bold, if (selected) VeloColors.foreground else VeloColors.gray300, 2.sp),
+            style = tabularTextStyle(10.sp, FontWeight.Bold, contentColor, 2.sp),
         )
     }
 }

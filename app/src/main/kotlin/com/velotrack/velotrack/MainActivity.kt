@@ -2,6 +2,7 @@ package com.velotrack.velotrack
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -48,6 +49,10 @@ class MainActivity : ComponentActivity() {
 
     private var requestingLocation = false
 
+    private val locationPrefs by lazy {
+        getSharedPreferences("last_location", Context.MODE_PRIVATE)
+    }
+
     private val gmsRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
         .setMinUpdateIntervalMillis(800L)
         .setWaitForAccurateLocation(false)
@@ -69,6 +74,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        restoreCachedLocation()
 
         setContent {
             VeloTheme {
@@ -113,16 +119,51 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dispatchLocation(loc: Location) {
-        viewModel.onLocation(
+        val point = GpsPoint(
+            lat = loc.latitude,
+            lng = loc.longitude,
+            timestamp = loc.time.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0,
+            altitude = if (loc.hasAltitude()) loc.altitude else null,
+            accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 0.0,
+        )
+        cacheLocation(point)
+        viewModel.onLocation(point)
+    }
+
+    private fun restoreCachedLocation() {
+        if (!locationPrefs.contains("lat") || !locationPrefs.contains("lng")) return
+        viewModel.restoreLastLocation(
             GpsPoint(
-                lat = loc.latitude,
-                lng = loc.longitude,
-                timestamp = loc.time.takeIf { it > 0 } ?: System.currentTimeMillis(),
-                speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0,
-                altitude = if (loc.hasAltitude()) loc.altitude else null,
-                accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 0.0,
+                lat = Double.fromBits(locationPrefs.getLong("lat", 0L)),
+                lng = Double.fromBits(locationPrefs.getLong("lng", 0L)),
+                timestamp = locationPrefs.getLong("timestamp", System.currentTimeMillis()),
+                speedMps = 0.0,
+                altitude = if (locationPrefs.contains("altitude")) {
+                    Double.fromBits(locationPrefs.getLong("altitude", 0L))
+                } else {
+                    null
+                },
+                accuracy = locationPrefs.getFloat("accuracy", 0f).toDouble(),
             ),
         )
+    }
+
+    private fun cacheLocation(point: GpsPoint) {
+        if (point.accuracy > 40.0) return
+        locationPrefs.edit()
+            .putLong("lat", point.lat.toBits())
+            .putLong("lng", point.lng.toBits())
+            .putLong("timestamp", point.timestamp)
+            .putFloat("accuracy", point.accuracy.toFloat())
+            .apply {
+                if (point.altitude != null) {
+                    putLong("altitude", point.altitude.toBits())
+                } else {
+                    remove("altitude")
+                }
+            }
+            .apply()
     }
 
     private fun hasLocationPermission(): Boolean {
