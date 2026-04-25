@@ -175,7 +175,13 @@ fun VeloMainScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         )
 
-        HoldProgressOverlay(state.isHolding, state.holdVersion, Modifier.align(Alignment.TopCenter))
+        HoldProgressOverlay(
+            isHolding = state.isHolding,
+            holdVersion = state.holdVersion,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding(),
+        )
 
         DeleteRideModal(
             visible = state.pendingDeleteRideId != null,
