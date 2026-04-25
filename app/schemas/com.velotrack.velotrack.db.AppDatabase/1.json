@@ -1,0 +1,76 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "65df5552d3882888476dc1155a8889de",
+    "entities": [
+      {
+        "tableName": "rides",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `startTime` INTEGER NOT NULL, `endTime` INTEGER, `pointsJson` TEXT NOT NULL, `totalDistance` REAL NOT NULL, `avgSpeed` REAL NOT NULL, `maxSpeed` REAL NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startTime",
+            "columnName": "startTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTime",
+            "columnName": "endTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pointsJson",
+            "columnName": "pointsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalDistance",
+            "columnName": "totalDistance",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgSpeed",
+            "columnName": "avgSpeed",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxSpeed",
+            "columnName": "maxSpeed",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '65df5552d3882888476dc1155a8889de')"
+    ]
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "2ff25eb1ed451fa64898004e58c6f789",
+    "entities": [
+      {
+        "tableName": "rides",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `startTime` INTEGER NOT NULL, `endTime` INTEGER, `totalDistance` REAL NOT NULL, `avgSpeed` REAL NOT NULL, `maxSpeed` REAL NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startTime",
+            "columnName": "startTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTime",
+            "columnName": "endTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "totalDistance",
+            "columnName": "totalDistance",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgSpeed",
+            "columnName": "avgSpeed",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxSpeed",
+            "columnName": "maxSpeed",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "gps_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`rideId` TEXT NOT NULL, `pointIndex` INTEGER NOT NULL, `lat` REAL NOT NULL, `lng` REAL NOT NULL, `timestamp` INTEGER NOT NULL, `speedMps` REAL NOT NULL, `altitude` REAL, `accuracy` REAL NOT NULL, PRIMARY KEY(`rideId`, `pointIndex`), FOREIGN KEY(`rideId`) REFERENCES `rides`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "rideId",
+            "columnName": "rideId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pointIndex",
+            "columnName": "pointIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lng",
+            "columnName": "lng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "speedMps",
+            "columnName": "speedMps",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "altitude",
+            "columnName": "altitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "rideId",
+            "pointIndex"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_gps_points_rideId",
+            "unique": false,
+            "columnNames": [
+              "rideId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_gps_points_rideId` ON `${TABLE_NAME}` (`rideId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "rides",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "rideId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2ff25eb1ed451fa64898004e58c6f789')"
+    ]
+  }
+}

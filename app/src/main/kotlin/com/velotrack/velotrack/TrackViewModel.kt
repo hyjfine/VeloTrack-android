@@ -216,16 +216,27 @@ class TrackViewModel(
                 GeminiClient.generateContent(BuildConfig.GEMINI_API_KEY, buildPrompt(ride))
             }.onSuccess { text ->
                 _uiState.update { it.copy(isAnalysing = false, aiAnalysis = text) }
-            }.onFailure {
+            }.onFailure { error ->
                 _uiState.update {
                     it.copy(
                         isAnalysing = false,
-                        errorMessage = "分析失败，请稍后重试",
+                        errorMessage = analysisErrorMessage(error),
                     )
                 }
             }
         }
     }
+
+    private fun analysisErrorMessage(error: Throwable): String =
+        when ((error as? GeminiClient.GeminiProxyException)?.reason) {
+            GeminiClient.GeminiProxyException.Reason.MissingApiKey -> "AI 服务未配置，请稍后再试"
+            GeminiClient.GeminiProxyException.Reason.RateLimited -> "AI 请求过于频繁，请稍后再试"
+            GeminiClient.GeminiProxyException.Reason.Network -> "网络连接异常，请稍后重试"
+            GeminiClient.GeminiProxyException.Reason.ServerRejected,
+            GeminiClient.GeminiProxyException.Reason.EmptyResponse,
+            null,
+            -> "分析失败，请稍后重试"
+        }
 
     private fun startTicker() {
         elapsedTicker?.cancel()

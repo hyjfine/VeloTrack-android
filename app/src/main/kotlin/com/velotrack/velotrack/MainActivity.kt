@@ -9,16 +9,13 @@ import androidx.activity.compose.setContent
 import com.velotrack.velotrack.ui.VeloTheme
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import com.velotrack.velotrack.db.AppDatabase
 import java.util.Locale
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -51,6 +48,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             VeloTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
+                LaunchedEffect(state.isRecording, state.isPaused) {
+                    syncLocationSubscription()
+                }
                 VeloMainScreen(
                     state = state,
                     provider = mapProvider,
@@ -70,12 +70,6 @@ class MainActivity : ComponentActivity() {
                     onAnalyze = { viewModel.runAnalysis() },
                     onBackDetail = { viewModel.backFromDetail() },
                 )
-            }
-        }
-
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.uiState.collect { syncLocationSubscription() }
             }
         }
     }
@@ -99,6 +93,7 @@ class MainActivity : ComponentActivity() {
         Log.d(
             "VeloTrack",
             "Map startup: provider=$mapProvider, region=${Locale.getDefault().country}, " +
+                "override=${BuildConfig.MAP_PROVIDER_OVERRIDE.ifBlank { "auto" }}, " +
                 "amapKeyPresent=${BuildConfig.AMAP_API_KEY.isNotBlank()}, " +
                 "googleKeyPresent=${BuildConfig.GOOGLE_MAPS_API_KEY.isNotBlank()}",
         )

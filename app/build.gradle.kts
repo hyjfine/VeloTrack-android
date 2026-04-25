@@ -29,9 +29,11 @@ android {
         val geminiKey = (project.findProperty("GEMINI_API_KEY") as String?) ?: ""
         val googleMapsKey = (project.findProperty("GOOGLE_MAPS_API_KEY") as String?) ?: ""
         val amapKey = (project.findProperty("AMAP_API_KEY") as String?) ?: ""
+        val mapProviderOverride = (project.findProperty("MAP_PROVIDER") as String?) ?: ""
         buildConfigField("String", "GEMINI_API_KEY", "\"${geminiKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${googleMapsKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "AMAP_API_KEY", "\"${amapKey.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "MAP_PROVIDER_OVERRIDE", "\"${mapProviderOverride.replace("\"", "\\\"")}\"")
         manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = googleMapsKey
         manifestPlaceholders["AMAP_API_KEY"] = amapKey
     }
@@ -54,6 +56,11 @@ android {
         buildConfig = true
         compose = true
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
 }
 
 dependencies {

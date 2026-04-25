@@ -1,9 +1,8 @@
 package com.velotrack.velotrack
 
 import com.velotrack.velotrack.db.RideDao
+import com.velotrack.velotrack.db.GpsPointEntity
 import com.velotrack.velotrack.db.RideEntity
-import org.json.JSONArray
-import org.json.JSONObject
 
 class RideRepository(
     private val dao: RideDao,
@@ -13,17 +12,19 @@ class RideRepository(
     fun getRide(id: String): Ride? = dao.getByIdBlocking(id)?.let(::entityToRide)
 
     fun saveRide(ride: Ride) {
-        dao.insertBlocking(
+        dao.saveRideWithPointsBlocking(
             RideEntity(
                 id = ride.id,
                 title = ride.title,
                 startTime = ride.startTime,
                 endTime = ride.endTime,
-                pointsJson = pointsToJson(ride.points),
                 totalDistance = ride.totalDistance,
                 avgSpeed = ride.avgSpeed,
                 maxSpeed = ride.maxSpeed,
             ),
+            ride.points.mapIndexed { index, point ->
+                pointToEntity(ride.id, index, point)
+            },
         )
     }
 
@@ -32,7 +33,7 @@ class RideRepository(
     }
 
     private fun entityToRide(entity: RideEntity): Ride {
-        val points = parsePoints(entity.pointsJson)
+        val points = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
         return Ride(
             id = entity.id,
             title = entity.title,
@@ -45,39 +46,25 @@ class RideRepository(
         )
     }
 
-    private fun pointsToJson(points: List<GpsPoint>): String {
-        val arr = JSONArray()
-        points.forEach { p ->
-            arr.put(
-                JSONObject()
-                    .put("lat", p.lat)
-                    .put("lng", p.lng)
-                    .put("timestamp", p.timestamp)
-                    .put("speed", p.speedMps)
-                    .put("altitude", p.altitude ?: JSONObject.NULL)
-                    .put("accuracy", p.accuracy),
-            )
-        }
-        return arr.toString()
-    }
+    private fun pointToEntity(rideId: String, index: Int, point: GpsPoint): GpsPointEntity =
+        GpsPointEntity(
+            rideId = rideId,
+            pointIndex = index,
+            lat = point.lat,
+            lng = point.lng,
+            timestamp = point.timestamp,
+            speedMps = point.speedMps,
+            altitude = point.altitude,
+            accuracy = point.accuracy,
+        )
 
-    private fun parsePoints(raw: String): List<GpsPoint> {
-        if (raw.isBlank()) return emptyList()
-        val arr = JSONArray(raw)
-        return buildList(arr.length()) {
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                add(
-                    GpsPoint(
-                        lat = o.optDouble("lat"),
-                        lng = o.optDouble("lng"),
-                        timestamp = o.optLong("timestamp"),
-                        speedMps = o.optDouble("speed"),
-                        altitude = if (o.isNull("altitude")) null else o.optDouble("altitude"),
-                        accuracy = o.optDouble("accuracy", 0.0),
-                    ),
-                )
-            }
-        }
-    }
+    private fun pointEntityToModel(entity: GpsPointEntity): GpsPoint =
+        GpsPoint(
+            lat = entity.lat,
+            lng = entity.lng,
+            timestamp = entity.timestamp,
+            speedMps = entity.speedMps,
+            altitude = entity.altitude,
+            accuracy = entity.accuracy,
+        )
 }
