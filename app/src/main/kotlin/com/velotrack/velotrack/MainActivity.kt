@@ -1,15 +1,8 @@
 package com.velotrack.velotrack
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.os.Build
 import android.os.Bundle
-import android.os.Looper
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,12 +16,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import com.velotrack.velotrack.db.AppDatabase
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -42,31 +29,13 @@ class MainActivity : ComponentActivity() {
     /** 与地图一致：国内不用 GMS 定位，避免「需要启动 Google Play 服务」弹窗。 */
     private val mapProvider: MapProvider by lazy { MapProviderSelector.select() }
 
-    private val fusedClient: FusedLocationProviderClient by lazy {
-        LocationServices.getFusedLocationProviderClient(this)
-    }
-    private val locationManager: LocationManager by lazy {
-        getSystemService(LOCATION_SERVICE) as LocationManager
+    private val lastLocationStore: LastLocationStore by lazy {
+        LastLocationStore(this)
     }
 
-    private var requestingLocation = false
-
-    private val locationPrefs by lazy {
-        getSharedPreferences("last_location", Context.MODE_PRIVATE)
+    private val locationTracker: LocationTracker by lazy {
+        LocationTracker(this, mapProvider, ::dispatchLocation)
     }
-
-    private val gmsRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-        .setMinUpdateIntervalMillis(800L)
-        .setWaitForAccurateLocation(false)
-        .build()
-
-    private val gmsCallback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) {
-            result.lastLocation?.let { dispatchLocation(it) }
-        }
-    }
-
-    private val platformListener = LocationListener { loc -> dispatchLocation(loc) }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -118,19 +87,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        stopLocationUpdates()
+        locationTracker.stop()
     }
 
-    private fun dispatchLocation(loc: Location) {
-        val point = GpsPoint(
-            lat = loc.latitude,
-            lng = loc.longitude,
-            timestamp = loc.time.takeIf { it > 0 } ?: System.currentTimeMillis(),
-            speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0,
-            altitude = if (loc.hasAltitude()) loc.altitude else null,
-            accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 0.0,
-        )
-        cacheLocation(point)
+    private fun dispatchLocation(point: GpsPoint) {
+        lastLocationStore.write(point)
         viewModel.onLocation(point)
     }
 
@@ -144,38 +105,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreCachedLocation() {
-        if (!locationPrefs.contains("lat") || !locationPrefs.contains("lng")) return
-        viewModel.restoreLastLocation(
-            GpsPoint(
-                lat = Double.fromBits(locationPrefs.getLong("lat", 0L)),
-                lng = Double.fromBits(locationPrefs.getLong("lng", 0L)),
-                timestamp = locationPrefs.getLong("timestamp", System.currentTimeMillis()),
-                speedMps = 0.0,
-                altitude = if (locationPrefs.contains("altitude")) {
-                    Double.fromBits(locationPrefs.getLong("altitude", 0L))
-                } else {
-                    null
-                },
-                accuracy = locationPrefs.getFloat("accuracy", 0f).toDouble(),
-            ),
-        )
-    }
-
-    private fun cacheLocation(point: GpsPoint) {
-        if (point.accuracy > 40.0) return
-        locationPrefs.edit()
-            .putLong("lat", point.lat.toBits())
-            .putLong("lng", point.lng.toBits())
-            .putLong("timestamp", point.timestamp)
-            .putFloat("accuracy", point.accuracy.toFloat())
-            .apply {
-                if (point.altitude != null) {
-                    putLong("altitude", point.altitude.toBits())
-                } else {
-                    remove("altitude")
-                }
-            }
-            .apply()
+        lastLocationStore.read()?.let(viewModel::restoreLastLocation)
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -188,14 +118,10 @@ class MainActivity : ComponentActivity() {
         val permissions = buildList {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
         }
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    @SuppressLint("MissingPermission")
     private fun syncLocationSubscription() {
         val state = viewModel.uiState.value
         val shouldTrack = state.isRecording && !state.isPaused
@@ -203,53 +129,10 @@ class MainActivity : ComponentActivity() {
             requestLocationPermissions()
             return
         }
-        if (shouldTrack && hasLocationPermission() && !requestingLocation) {
-            when (mapProvider) {
-                MapProvider.AMAP -> startPlatformLocation()
-                MapProvider.GOOGLE_MAPS -> startGmsLocation()
-            }
-            requestingLocation = true
+        if (shouldTrack && hasLocationPermission()) {
+            locationTracker.start()
         } else if (!shouldTrack) {
-            stopLocationUpdates()
+            locationTracker.stop()
         }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun startPlatformLocation() {
-        val minTimeMs = 1000L
-        val minDistanceM = 1f
-        val mainLooper = Looper.getMainLooper()
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            locationManager.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                minTimeMs,
-                minDistanceM,
-                platformListener,
-                mainLooper,
-            )
-        }
-        if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-            locationManager.requestLocationUpdates(
-                LocationManager.NETWORK_PROVIDER,
-                minTimeMs,
-                minDistanceM,
-                platformListener,
-                mainLooper,
-            )
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun startGmsLocation() {
-        fusedClient.requestLocationUpdates(gmsRequest, gmsCallback, mainLooper)
-    }
-
-    private fun stopLocationUpdates() {
-        if (!requestingLocation) return
-        when (mapProvider) {
-            MapProvider.AMAP -> runCatching { locationManager.removeUpdates(platformListener) }
-            MapProvider.GOOGLE_MAPS -> runCatching { fusedClient.removeLocationUpdates(gmsCallback) }
-        }
-        requestingLocation = false
     }
 }

@@ -27,6 +27,7 @@ import com.amap.api.maps.AMap
 import com.amap.api.maps.CameraUpdateFactory
 import com.amap.api.maps.MapView
 import com.amap.api.maps.model.LatLng as AmapLatLng
+import com.amap.api.maps.model.Polyline as AmapPolyline
 import com.amap.api.maps.model.PolylineOptions as AmapPolylineOptions
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.CameraUpdateFactory as GoogleCameraUpdateFactory
@@ -42,6 +43,8 @@ import kotlinx.coroutines.delay
 private val defaultLat = 39.9042
 private val defaultLng = 116.4074
 private const val RECENTER_DELAY_MS = 3000L
+private const val CAMERA_MIN_INTERVAL_MS = 2000L
+private const val CAMERA_MIN_DISTANCE_M = 15.0
 private const val GOOGLE_DARK_MAP_STYLE = """
 [
   {"elementType":"geometry","stylers":[{"color":"#24262B"}]},
@@ -131,26 +134,40 @@ private fun GooglePane(
         if (focus != null) GoogleLatLng(focus.lat, focus.lng) else GoogleLatLng(centerLat, centerLng),
     )
     var lastUserGestureAt by remember { mutableStateOf(0L) }
+    var lastCameraMoveAt by remember { mutableStateOf(0L) }
+    var lastCameraLatLng by remember { mutableStateOf<GoogleLatLng?>(null) }
     fun markUserGesture() {
         if (followLatestPosition) lastUserGestureAt = System.currentTimeMillis()
+    }
+    suspend fun animateToTarget(target: GoogleLatLng, durationMs: Int) {
+        cameraState.animate(
+            update = GoogleCameraUpdateFactory.newLatLngZoom(target, mapZoom),
+            durationMs = durationMs,
+        )
+        lastCameraMoveAt = System.currentTimeMillis()
+        lastCameraLatLng = target
     }
 
     LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt) {
         if (followLatestPosition && lastUserGestureAt > 0L) return@LaunchedEffect
-        cameraState.animate(
-            update = GoogleCameraUpdateFactory.newLatLngZoom(latestTarget, mapZoom),
-            durationMs = 450,
-        )
+        val now = System.currentTimeMillis()
+        val previous = lastCameraLatLng
+        val movedMeters = if (previous == null) {
+            Double.MAX_VALUE
+        } else {
+            GeoUtils.haversineMeters(previous.latitude, previous.longitude, latestTarget.latitude, latestTarget.longitude)
+        }
+        if (followLatestPosition && lastCameraMoveAt > 0L && now - lastCameraMoveAt < CAMERA_MIN_INTERVAL_MS && movedMeters < CAMERA_MIN_DISTANCE_M) {
+            return@LaunchedEffect
+        }
+        animateToTarget(latestTarget, 450)
     }
     LaunchedEffect(lastUserGestureAt, followLatestPosition, mapZoom) {
         if (!followLatestPosition || lastUserGestureAt == 0L) return@LaunchedEffect
         val gestureAt = lastUserGestureAt
         delay(RECENTER_DELAY_MS)
         if (lastUserGestureAt == gestureAt) {
-            cameraState.animate(
-                update = GoogleCameraUpdateFactory.newLatLngZoom(latestTarget, mapZoom),
-                durationMs = 650,
-            )
+            animateToTarget(latestTarget, 650)
             lastUserGestureAt = 0L
         }
     }
@@ -200,7 +217,11 @@ private fun AmapPane(
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var aMap by remember { mutableStateOf<AMap?>(null) }
+    var shadowPolyline by remember { mutableStateOf<AmapPolyline?>(null) }
+    var routePolyline by remember { mutableStateOf<AmapPolyline?>(null) }
     var lastUserGestureAt by remember { mutableStateOf(0L) }
+    var lastCameraMoveAt by remember { mutableStateOf(0L) }
+    var lastCameraLatLng by remember { mutableStateOf<AmapLatLng?>(null) }
     fun markUserGesture() {
         if (followLatestPosition) lastUserGestureAt = System.currentTimeMillis()
     }
@@ -255,23 +276,34 @@ private fun AmapPane(
     }
     LaunchedEffect(points, aMap, polylineWidth, pxPerDp) {
         val map = aMap ?: return@LaunchedEffect
-        map.clear()
-        if (points.size >= 2) {
-            val path = points.map { AmapLatLng(it.lat, it.lng) }
-            val shadowArgb = Color.Black.copy(alpha = 0.4f).toArgb()
-            val argb = VeloColors.polyline.copy(alpha = 1f).toArgb()
-            map.addPolyline(
+        if (points.size < 2) {
+            shadowPolyline?.remove()
+            routePolyline?.remove()
+            shadowPolyline = null
+            routePolyline = null
+            return@LaunchedEffect
+        }
+        val path = points.map { AmapLatLng(it.lat, it.lng) }
+        val shadowArgb = Color.Black.copy(alpha = 0.4f).toArgb()
+        val argb = VeloColors.polyline.copy(alpha = 1f).toArgb()
+        if (shadowPolyline == null || routePolyline == null) {
+            shadowPolyline?.remove()
+            routePolyline?.remove()
+            shadowPolyline = map.addPolyline(
                 AmapPolylineOptions()
                     .addAll(path)
                     .color(shadowArgb)
                     .width((polylineWidth + 5f) * pxPerDp),
             )
-            map.addPolyline(
+            routePolyline = map.addPolyline(
                 AmapPolylineOptions()
                     .addAll(path)
                     .color(argb)
                     .width(polylineWidth * pxPerDp),
             )
+        } else {
+            shadowPolyline?.points = path
+            routePolyline?.points = path
         }
     }
     val focus = when {
@@ -285,7 +317,19 @@ private fun AmapPane(
     LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt, aMap) {
         val map = aMap ?: return@LaunchedEffect
         if (followLatestPosition && lastUserGestureAt > 0L) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        val previous = lastCameraLatLng
+        val movedMeters = if (previous == null) {
+            Double.MAX_VALUE
+        } else {
+            GeoUtils.haversineMeters(previous.latitude, previous.longitude, latestTarget.latitude, latestTarget.longitude)
+        }
+        if (followLatestPosition && lastCameraMoveAt > 0L && now - lastCameraMoveAt < CAMERA_MIN_INTERVAL_MS && movedMeters < CAMERA_MIN_DISTANCE_M) {
+            return@LaunchedEffect
+        }
         map.animateCamera(CameraUpdateFactory.newLatLngZoom(latestTarget, mapZoom), 450L, null)
+        lastCameraMoveAt = now
+        lastCameraLatLng = latestTarget
     }
     LaunchedEffect(lastUserGestureAt, followLatestPosition, mapZoom, aMap) {
         val map = aMap ?: return@LaunchedEffect
@@ -294,6 +338,8 @@ private fun AmapPane(
         delay(RECENTER_DELAY_MS)
         if (lastUserGestureAt == gestureAt) {
             map.animateCamera(CameraUpdateFactory.newLatLngZoom(latestTarget, mapZoom), 650L, null)
+            lastCameraMoveAt = System.currentTimeMillis()
+            lastCameraLatLng = latestTarget
             lastUserGestureAt = 0L
         }
     }
