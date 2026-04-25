@@ -1,8 +1,11 @@
 package com.velotrack.velotrack.ui
 
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -72,9 +75,12 @@ private val VeloLightScheme = lightColorScheme(
 )
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun VeloTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = VeloLightScheme,
-        content = content,
-    )
+    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+        MaterialTheme(
+            colorScheme = VeloLightScheme,
+            content = content,
+        )
+    }
 }

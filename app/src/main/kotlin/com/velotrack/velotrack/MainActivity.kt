@@ -10,6 +10,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.velotrack.velotrack.ui.VeloTheme
@@ -29,6 +30,7 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.velotrack.velotrack.db.AppDatabase
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -74,6 +76,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        logMapStartupDiagnostics()
         restoreCachedLocation()
 
         setContent {
@@ -129,6 +132,15 @@ class MainActivity : ComponentActivity() {
         )
         cacheLocation(point)
         viewModel.onLocation(point)
+    }
+
+    private fun logMapStartupDiagnostics() {
+        Log.d(
+            "VeloTrack",
+            "Map startup: provider=$mapProvider, region=${Locale.getDefault().country}, " +
+                "amapKeyPresent=${BuildConfig.AMAP_API_KEY.isNotBlank()}, " +
+                "googleKeyPresent=${BuildConfig.GOOGLE_MAPS_API_KEY.isNotBlank()}",
+        )
     }
 
     private fun restoreCachedLocation() {

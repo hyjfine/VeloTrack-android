@@ -14,7 +14,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -96,6 +95,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
+import com.velotrack.velotrack.ui.rememberTapFeedback
+import com.velotrack.velotrack.ui.tapFeedbackClickable
 import com.velotrack.velotrack.ui.tabularTextStyle
 import java.util.Locale
 import kotlinx.coroutines.coroutineScope
@@ -366,6 +367,7 @@ private fun MainGaugeCard(
         state.isPaused -> Color.White
         else -> VeloColors.accent
     }
+    val tapFeedback = rememberTapFeedback()
     Card(
         shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
         colors = CardDefaults.cardColors(containerColor = VeloColors.white),
@@ -423,6 +425,7 @@ private fun MainGaugeCard(
                             detectTapGestures(
                                 onPress = {
                                     if (!state.isRecording) {
+                                        tapFeedback()
                                         onStartRecording()
                                         return@detectTapGestures
                                     }
@@ -432,12 +435,16 @@ private fun MainGaugeCard(
                                         val job = launch {
                                             delay(1500)
                                             longHoldReached = true
+                                            tapFeedback()
                                             onStopRecording()
                                         }
                                         val released = tryAwaitRelease()
                                         job.cancel()
                                         onEndHold()
-                                        if (released && !longHoldReached) onTogglePause()
+                                        if (released && !longHoldReached) {
+                                            tapFeedback()
+                                            onTogglePause()
+                                        }
                                     }
                                 },
                             )
@@ -627,7 +634,7 @@ private fun HistoryRideRow(
                 .fillMaxWidth()
                 .scale(cardScale)
                 .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusLg.dp))
-                .clickable(interactionSource = cardInteraction, indication = null) { onOpen() },
+                .tapFeedbackClickable(interactionSource = cardInteraction) { onOpen() },
             border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
         ) {
             Row(
@@ -686,7 +693,7 @@ private fun HistoryRideRow(
                         tint = VeloColors.gray300,
                         modifier = Modifier
                             .size(40.dp)
-                            .clickable { onDelete() }
+                            .tapFeedbackClickable { onDelete() }
                             .padding(10.dp),
                     )
                     Icon(
@@ -735,7 +742,7 @@ private fun DetailScreen(
                         .align(Alignment.CenterStart)
                         .size(40.dp)
                         .clip(RoundedCornerShape(VeloDimens.radiusSm.dp))
-                        .clickable { onBack() },
+                        .tapFeedbackClickable { onBack() },
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
@@ -922,6 +929,7 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
 
 @Composable
 private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
+    val tapFeedback = rememberTapFeedback()
     Card(
         shape = RoundedCornerShape(VeloDimens.radiusXxl.dp),
         colors = CardDefaults.cardColors(containerColor = VeloColors.foreground),
@@ -964,7 +972,10 @@ private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
                 when {
                     !state.isAnalysing && state.aiAnalysis == null && state.errorMessage == null -> {
                         Button(
-                            onClick = onAnalyze,
+                            onClick = {
+                                tapFeedback()
+                                onAnalyze()
+                            },
                             shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = VeloColors.white, contentColor = VeloColors.foreground),
                             modifier = Modifier.heightIn(min = 52.dp),
@@ -1076,7 +1087,7 @@ private fun NavItem(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clickable { onClick() }
+            .tapFeedbackClickable { onClick() }
             .padding(horizontal = 24.dp),
     ) {
         Box(Modifier.scale(selectionScale)) {
@@ -1092,6 +1103,7 @@ private fun NavItem(
 
 @Composable
 private fun DeleteRideModal(visible: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    val tapFeedback = rememberTapFeedback()
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(tween(200)),
@@ -1102,7 +1114,7 @@ private fun DeleteRideModal(visible: Boolean, onConfirm: () -> Unit, onCancel: (
                 Modifier
                     .fillMaxSize()
                     .background(VeloColors.overlay)
-                    .clickable { onCancel() },
+                    .tapFeedbackClickable { onCancel() },
             )
             Card(
                 shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
@@ -1137,14 +1149,23 @@ private fun DeleteRideModal(visible: Boolean, onConfirm: () -> Unit, onCancel: (
                     )
                     Spacer(Modifier.height(32.dp))
                     Button(
-                        onClick = onConfirm,
+                        onClick = {
+                            tapFeedback()
+                            onConfirm()
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = VeloColors.foreground, contentColor = VeloColors.white),
                     ) {
                         Text("CONFIRM DELETE", style = tabularTextStyle(14.sp, FontWeight.Bold, VeloColors.white, 1.5.sp))
                     }
-                    TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = {
+                            tapFeedback()
+                            onCancel()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         Text("CANCEL", style = tabularTextStyle(12.sp, FontWeight.Bold, VeloColors.gray400, 1.8.sp))
                     }
                 }
