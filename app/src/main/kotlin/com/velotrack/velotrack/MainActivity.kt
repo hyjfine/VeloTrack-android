@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableAdaptiveHighRefreshRate()
         logMapStartupDiagnostics()
         restoreCachedLocation()
 
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        enableAdaptiveHighRefreshRate()
         syncLocationSubscription()
     }
 
