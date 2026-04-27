@@ -34,6 +34,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,11 +73,12 @@ fun DetailScreen(
     onAnalyze: () -> Unit,
 ) {
     val scroll = rememberScrollState()
+    var isMapTouching by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxSize()
             .background(VeloColors.background)
-            .verticalScroll(scroll),
+            .verticalScroll(scroll, enabled = !isMapTouching),
     ) {
         Column(
             Modifier
@@ -129,6 +134,11 @@ fun DetailScreen(
                 followLatestPosition = false,
                 mapZoom = 14f,
                 polylineWidth = 5f,
+                showEndpointMarkers = true,
+                fitRouteBounds = true,
+                onMapTouchingChanged = { touching ->
+                    if (isMapTouching != touching) isMapTouching = touching
+                },
             )
             Box(
                 Modifier
