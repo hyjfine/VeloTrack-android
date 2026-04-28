@@ -157,6 +157,13 @@ private fun hasDistinctRoutePoints(points: List<GpsPoint>): Boolean {
     return points.any { it.lat != first.lat || it.lng != first.lng }
 }
 
+private fun wgs84ToAmapLatLng(lat: Double, lng: Double): AmapLatLng {
+    val coordinate = CoordinateTransform.wgs84ToGcj02(lat, lng)
+    return AmapLatLng(coordinate.lat, coordinate.lng)
+}
+
+private fun GpsPoint.toAmapLatLng(): AmapLatLng = wgs84ToAmapLatLng(lat, lng)
+
 /**
  * @param followLatestPosition `true`：相机跟随最后一个点（录制）；`false`：固定首点 + [mapZoom]（详情预览）
  * @param polylineWidth 与 h5 `weight={5}` / design-tokens `polylineWeight` 一致
@@ -476,7 +483,7 @@ private fun AmapPane(
                 }
                 map.mapType = if (darkMode) AMap.MAP_TYPE_NIGHT else AMap.MAP_TYPE_NORMAL
                 map.moveCamera(
-                    CameraUpdateFactory.newLatLngZoom(AmapLatLng(centerLat, centerLng), mapZoom),
+                    CameraUpdateFactory.newLatLngZoom(wgs84ToAmapLatLng(centerLat, centerLng), mapZoom),
                 )
             }
         }
@@ -514,7 +521,7 @@ private fun AmapPane(
             routePolyline = null
             return@LaunchedEffect
         }
-        val path = points.map { AmapLatLng(it.lat, it.lng) }
+        val path = points.map { it.toAmapLatLng() }
         val shadowArgb = Color.Black.copy(alpha = 0.4f).toArgb()
         val argb = VeloColors.polyline.copy(alpha = 1f).toArgb()
         if (shadowPolyline == null || routePolyline == null) {
@@ -541,12 +548,12 @@ private fun AmapPane(
         val map = aMap ?: return@LaunchedEffect
         if (!canFitRouteBounds || points.size < 2) return@LaunchedEffect
         val boundsBuilder = AmapLatLngBounds.Builder()
-        points.forEach { boundsBuilder.include(AmapLatLng(it.lat, it.lng)) }
+        points.forEach { boundsBuilder.include(it.toAmapLatLng()) }
         val paddingPx = (ROUTE_BOUNDS_PADDING_DP * markerDensity).toInt()
         mapView.post {
             map.moveCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), paddingPx))
             lastCameraMoveAt = System.currentTimeMillis()
-            lastCameraLatLng = AmapLatLng(points.last().lat, points.last().lng)
+            lastCameraLatLng = points.last().toAmapLatLng()
         }
     }
     LaunchedEffect(points, aMap, showEndpointMarkers, startMarkerIcon, finishMarkerIcon) {
@@ -555,8 +562,8 @@ private fun AmapPane(
             removeEndpointMarkers()
             return@LaunchedEffect
         }
-        val start = AmapLatLng(points.first().lat, points.first().lng)
-        val finish = AmapLatLng(points.last().lat, points.last().lng)
+        val start = points.first().toAmapLatLng()
+        val finish = points.last().toAmapLatLng()
         val currentStartMarker = startMarker
         if (currentStartMarker == null) {
             startMarker = map.addMarker(
@@ -596,7 +603,7 @@ private fun AmapPane(
         else -> points.first()
     }
     val latestTarget by rememberUpdatedState(
-        if (focus != null) AmapLatLng(focus.lat, focus.lng) else AmapLatLng(centerLat, centerLng),
+        if (focus != null) focus.toAmapLatLng() else wgs84ToAmapLatLng(centerLat, centerLng),
     )
     LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt, aMap) {
         val map = aMap ?: return@LaunchedEffect
