@@ -2,6 +2,7 @@ package com.velotrack.velotrack
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +53,7 @@ import kotlinx.coroutines.launch
 fun RecordingScreen(
     state: TrackUiState,
     provider: MapProvider,
+    debugPermissions: LocationPermissionSnapshot = LocationPermissionSnapshot(),
     navBottom: androidx.compose.ui.unit.Dp,
     onStartRecording: () -> Unit,
     onTogglePause: () -> Unit,
@@ -94,6 +100,19 @@ fun RecordingScreen(
             )
         }
 
+        if (BuildConfig.DEBUG) {
+            DebugStatusPanel(
+                state = state,
+                provider = provider,
+                permissions = debugPermissions,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(top = 116.dp)
+                    .padding(horizontal = VeloDimens.sidePadding.dp),
+            )
+        }
+
         MainGaugeCard(
             state = state,
             modifier = Modifier
@@ -107,6 +126,68 @@ fun RecordingScreen(
             onEndHold = onEndHold,
         )
     }
+}
+
+@Composable
+private fun DebugStatusPanel(
+    state: TrackUiState,
+    provider: MapProvider,
+    permissions: LocationPermissionSnapshot,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.68f)),
+        border = BorderStroke(1.dp, VeloColors.accent.copy(alpha = 0.45f)),
+        modifier = modifier
+            .widthIn(max = 360.dp)
+            .clickable { expanded = !expanded },
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = if (expanded) "DEBUG GPS ▲" else "DEBUG GPS ▼  ${state.locationDebugMessage ?: "tap"}",
+                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.accent),
+                maxLines = 1,
+            )
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                DebugLine("provider", provider.displayName)
+                DebugLine("recording", "${state.isRecording} paused=${state.isPaused}")
+                DebugLine("permission", "any=${permissions.any} fine=${permissions.fine} coarse=${permissions.coarse}")
+                DebugLine("center", "${formatDebugCoord(state.mapCenterLat)}, ${formatDebugCoord(state.mapCenterLng)}")
+                DebugLine("points", state.livePoints.size.toString())
+                DebugLine("last loc", state.lastLocationAtMs?.let { "${formatLocationAgeMs(it)} ago" } ?: "none")
+                DebugLine("accuracy", state.lastLocationAccuracyM?.let { "${it.toInt()}m" } ?: "unknown")
+                DebugLine("track point", state.lastLocationCountedInTrack.toString())
+                DebugLine("signalLost", state.signalLost.toString())
+                DebugLine("reason", state.lastLocationDropReason ?: "-")
+                DebugLine("event", state.locationDebugMessage ?: "-")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DebugLine(label: String, value: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = label.uppercase(),
+            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.gray400),
+            modifier = Modifier.width(82.dp),
+        )
+        Text(
+            text = value,
+            style = tabularTextStyle(9.sp, FontWeight.Bold, Color.White.copy(alpha = 0.88f)),
+        )
+    }
+}
+
+private fun formatDebugCoord(value: Double): String = String.format(java.util.Locale.US, "%.5f", value)
+
+private fun formatLocationAgeMs(timestamp: Long): String {
+    val ageSec = ((System.currentTimeMillis() - timestamp) / 1000).coerceAtLeast(0)
+    return if (ageSec < 60) "${ageSec}s" else "${ageSec / 60}m${ageSec % 60}s"
 }
 
 @Composable

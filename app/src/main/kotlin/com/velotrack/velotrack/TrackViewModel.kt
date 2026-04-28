@@ -34,6 +34,11 @@ data class TrackUiState(
     val aiAnalysis: String? = null,
     val isAnalysing: Boolean = false,
     val errorMessage: String? = null,
+    val lastLocationAtMs: Long? = null,
+    val lastLocationAccuracyM: Double? = null,
+    val lastLocationCountedInTrack: Boolean = false,
+    val lastLocationDropReason: String? = null,
+    val locationDebugMessage: String? = null,
 )
 
 class TrackViewModel(
@@ -146,9 +151,29 @@ class TrackViewModel(
     }
 
     fun onLocation(point: GpsPoint) {
-        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) return
+        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) {
+            _uiState.update {
+                it.copy(
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = "accuracy>${MAP_LOCATION_MAX_ACCURACY_M.toInt()}m",
+                )
+            }
+            return
+        }
         _uiState.update { s ->
-            if (!s.isRecording || s.isPaused) return@update s
+            if (!s.isRecording || s.isPaused) {
+                return@update s.copy(
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = if (!s.isRecording) "not recording" else "paused",
+                    mapCenterLat = point.lat,
+                    mapCenterLng = point.lng,
+                    currentAltitude = point.altitude,
+                )
+            }
             val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
             val points = if (canUseForTrack) s.livePoints + point else s.livePoints
             s.copy(
@@ -158,6 +183,10 @@ class TrackViewModel(
                 currentSpeedMps = if (canUseForTrack) max(0.0, point.speedMps) else s.currentSpeedMps,
                 currentAltitude = point.altitude,
                 signalLost = point.accuracy > GOOD_SIGNAL_MAX_ACCURACY_M,
+                lastLocationAtMs = point.timestamp,
+                lastLocationAccuracyM = point.accuracy,
+                lastLocationCountedInTrack = canUseForTrack,
+                lastLocationDropReason = if (canUseForTrack) null else "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m",
             )
         }
     }
@@ -172,9 +201,17 @@ class TrackViewModel(
                     mapCenterLat = point.lat,
                     mapCenterLng = point.lng,
                     currentAltitude = point.altitude,
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = "restored cache",
                 )
             }
         }
+    }
+
+    fun onLocationDebug(message: String) {
+        _uiState.update { it.copy(locationDebugMessage = message) }
     }
 
     fun loadHistory() {

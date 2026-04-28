@@ -30,6 +30,20 @@ object CoordinateTransform {
         return Coordinate(lat + dLat, lng + dLng)
     }
 
+    /**
+     * Converts GCJ-02 coordinates back to WGS-84 using a lightweight inverse approximation.
+     * This is intended for normalizing AMap location results before storing them as [GpsPoint].
+     */
+    fun gcj02ToWgs84(lat: Double, lng: Double): Coordinate {
+        if (!isInMainlandChina(lat, lng)) return Coordinate(lat, lng)
+
+        val gcj = wgs84ToGcj02(lat, lng)
+        return Coordinate(
+            lat = lat * 2 - gcj.lat,
+            lng = lng * 2 - gcj.lng,
+        )
+    }
+
     /** Rough mainland-China guard. Hong Kong, Macau, and Taiwan are left unchanged. */
     fun isInMainlandChina(lat: Double, lng: Double): Boolean {
         if (lat !in 3.86..53.55 || lng !in 73.66..135.05) return false

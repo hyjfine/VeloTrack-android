@@ -27,6 +27,13 @@ data class Ride(
     val maxSpeed: Double,
 )
 
+data class LocationPermissionSnapshot(
+    val fine: Boolean = false,
+    val coarse: Boolean = false,
+) {
+    val any: Boolean get() = fine || coarse
+}
+
 enum class AppView {
     RECORDING,
     HISTORY,

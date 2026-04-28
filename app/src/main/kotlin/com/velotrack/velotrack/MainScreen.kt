@@ -28,6 +28,7 @@ import com.velotrack.velotrack.ui.VeloColors
 fun VeloMainScreen(
     state: TrackUiState,
     provider: MapProvider,
+    debugPermissions: LocationPermissionSnapshot = LocationPermissionSnapshot(),
     onStartRecording: () -> Unit,
     onTogglePause: () -> Unit,
     onStopRecording: () -> Unit,
@@ -66,6 +67,7 @@ fun VeloMainScreen(
                 RecordingScreen(
                     state = state,
                     provider = provider,
+                    debugPermissions = debugPermissions,
                     navBottom = navBottom,
                     onStartRecording = onStartRecording,
                     onTogglePause = onTogglePause,

@@ -2,6 +2,7 @@ package com.velotrack.velotrack
 
 import android.app.Application
 import android.util.Log
+import com.amap.api.location.AMapLocationClient
 import com.amap.api.maps.MapsInitializer
 
 /**
@@ -14,6 +15,11 @@ class VeloApplication : Application() {
         runCatching {
             MapsInitializer.updatePrivacyShow(this, true, true)
             MapsInitializer.updatePrivacyAgree(this, true)
+            AMapLocationClient.updatePrivacyShow(this, true, true)
+            AMapLocationClient.updatePrivacyAgree(this, true)
+            if (BuildConfig.AMAP_API_KEY.isNotBlank()) {
+                AMapLocationClient.setApiKey(BuildConfig.AMAP_API_KEY)
+            }
         }.onFailure { e ->
             Log.e("VeloTrack", "AMap privacy init failed", e)
         }

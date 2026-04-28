@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val locationTracker: LocationTracker by lazy {
-        LocationTracker(this, mapProvider, ::dispatchLocation)
+        LocationTracker(this, mapProvider, ::dispatchLocation, viewModel::onLocationDebug)
     }
 
     private val permissionLauncher =
@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 VeloMainScreen(
                     state = state,
                     provider = mapProvider,
+                    debugPermissions = locationPermissionSnapshot(),
                     onStartRecording = { viewModel.startRecording() },
                     onTogglePause = { viewModel.togglePause() },
                     onStopRecording = { viewModel.stopRecording() },
@@ -108,6 +109,12 @@ class MainActivity : ComponentActivity() {
     private fun hasLocationPermission(): Boolean {
         return hasFineLocationPermission() || hasCoarseLocationPermission()
     }
+
+    private fun locationPermissionSnapshot(): LocationPermissionSnapshot =
+        LocationPermissionSnapshot(
+            fine = hasFineLocationPermission(),
+            coarse = hasCoarseLocationPermission(),
+        )
 
     private fun hasFineLocationPermission(): Boolean =
         ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
