@@ -76,7 +76,6 @@ class LocationTracker(
         if (running) stop()
         runningPrecise = precise
         onDebugEvent("start provider=$provider precise=$precise")
-        emitRecentKnownLocation()
         when (provider) {
             MapProvider.AMAP -> startAmapLocation(precise)
             MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise)
@@ -160,14 +159,14 @@ class LocationTracker(
             isOnceLocationLatest = false
             isNeedAddress = false
             isMockEnable = false
-            isGpsFirst = false
-            isLocationCacheEnable = true
+            isGpsFirst = precise
+            isLocationCacheEnable = false
             isWifiScan = true
             isOffset = true
             httpTimeOut = 8000L
-            setCacheCallBack(true)
-            setCacheCallBackTime(RECENT_LOCATION_MAX_AGE_MS.toInt())
-            setLastLocationLifeCycle(RECENT_LOCATION_MAX_AGE_MS)
+            setCacheCallBack(false)
+            setCacheCallBackTime(0)
+            setLastLocationLifeCycle(0L)
         }
 
     @SuppressLint("MissingPermission")
@@ -203,23 +202,6 @@ class LocationTracker(
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun emitRecentKnownLocation() {
-        val candidates = buildList {
-            add(runCatching { locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull())
-            add(runCatching { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull())
-            add(runCatching { locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull())
-        }.filterNotNull()
-
-        candidates
-            .filter { it.isRecentEnough() }
-            .minWithOrNull(compareBy<Location> { if (it.hasAccuracy()) it.accuracy else Float.MAX_VALUE }.thenByDescending { it.time })
-            ?.let {
-                onDebugEvent("Platform recent ${it.provider} acc=${it.accuracyText()}")
-                onLocation(it.toGpsPoint())
-            }
-    }
-
     private fun Location.isRecentEnough(): Boolean =
         time > 0 && System.currentTimeMillis() - time <= RECENT_LOCATION_MAX_AGE_MS
 
@@ -253,6 +235,6 @@ class LocationTracker(
     }
 
     private companion object {
-        const val RECENT_LOCATION_MAX_AGE_MS = 15 * 60 * 1000L
+        const val RECENT_LOCATION_MAX_AGE_MS = 5 * 1000L
     }
 }

@@ -103,11 +103,7 @@ class TrackViewModel(
         elapsedTicker?.cancel()
 
         val points = s.livePoints
-        val totalDistance = points.zipWithNext()
-            .sumOf { (a, b) -> GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng) }
-        val moving = points.map { it.speedMps }.filter { it > 0.3 }
-        val avgSpeed = if (moving.isEmpty()) 0.0 else moving.average()
-        val maxSpeed = if (moving.isEmpty()) 0.0 else moving.max()
+        val stats = calculateRideStats(points)
         val start = if (points.isEmpty()) System.currentTimeMillis() - accumulatedElapsed else points.first().timestamp
         val end = if (points.isEmpty()) System.currentTimeMillis() else points.last().timestamp
         val ride = Ride(
@@ -116,9 +112,9 @@ class TrackViewModel(
             startTime = start,
             endTime = end,
             points = points,
-            totalDistance = totalDistance,
-            avgSpeed = avgSpeed,
-            maxSpeed = maxSpeed,
+            totalDistance = stats.totalDistance,
+            avgSpeed = stats.avgSpeed,
+            maxSpeed = stats.maxSpeed,
         )
         viewModelScope.launch(Dispatchers.IO) {
             repo.saveRide(ride)
@@ -174,13 +170,14 @@ class TrackViewModel(
                     currentAltitude = point.altitude,
                 )
             }
-            val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
-            val points = if (canUseForTrack) s.livePoints + point else s.livePoints
+            val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M && isFreshTrackPoint(point, s.livePoints.lastOrNull())
+            val trackPoint = if (canUseForTrack) point.withResolvedSpeed(s.livePoints.lastOrNull()) else point
+            val points = if (canUseForTrack) s.livePoints + trackPoint else s.livePoints
             s.copy(
                 livePoints = points,
                 mapCenterLat = point.lat,
                 mapCenterLng = point.lng,
-                currentSpeedMps = if (canUseForTrack) max(0.0, point.speedMps) else s.currentSpeedMps,
+                currentSpeedMps = if (canUseForTrack) trackPoint.speedMps else s.currentSpeedMps,
                 currentAltitude = point.altitude,
                 signalLost = point.accuracy > GOOD_SIGNAL_MAX_ACCURACY_M,
                 lastLocationAtMs = point.timestamp,
@@ -287,6 +284,83 @@ class TrackViewModel(
         }
     }
 
+    private fun isFreshTrackPoint(point: GpsPoint, previous: GpsPoint?): Boolean {
+        if (point.timestamp + MAX_LOCATION_CLOCK_SKEW_MS < recordingStartAt) return false
+        if (previous != null && point.timestamp <= previous.timestamp) return false
+        return true
+    }
+
+    private fun GpsPoint.withResolvedSpeed(previous: GpsPoint?): GpsPoint {
+        val providerSpeed = speedMps.takeIf { it.isReliableSpeed() }
+        val segment = previous?.segmentTo(this)
+        val segmentSpeed = segment?.speedMps?.takeIf { speed ->
+            segment.isReliableForSpeed() && speed.isReliableSpeed()
+        }
+        val resolvedSpeed = when {
+            providerSpeed != null && segmentSpeed != null -> resolveSpeed(providerSpeed, segmentSpeed)
+            providerSpeed != null -> providerSpeed
+            segmentSpeed != null -> segmentSpeed
+            else -> 0.0
+        }
+        return copy(speedMps = resolvedSpeed)
+    }
+
+    private fun resolveSpeed(providerSpeed: Double, segmentSpeed: Double): Double {
+        val absoluteDelta = kotlin.math.abs(providerSpeed - segmentSpeed)
+        val diverged = absoluteDelta > SPEED_DIVERGENCE_DELTA_MPS &&
+            max(providerSpeed, segmentSpeed) > max(MOVING_SPEED_THRESHOLD_MPS, minOf(providerSpeed, segmentSpeed)) * SPEED_DIVERGENCE_RATIO
+
+        return when {
+            diverged && providerSpeed > segmentSpeed -> segmentSpeed
+            diverged -> max(providerSpeed, segmentSpeed * SEGMENT_SPEED_FLOOR_FACTOR)
+            else -> max(providerSpeed, segmentSpeed * SEGMENT_SPEED_FLOOR_FACTOR)
+        }
+    }
+
+    private fun calculateRideStats(points: List<GpsPoint>): RideStats {
+        if (points.size < 2) {
+            val maxPointSpeed = points.maxOfOrNull { it.speedMps.takeIf(Double::isFinite) ?: 0.0 } ?: 0.0
+            return RideStats(totalDistance = 0.0, avgSpeed = 0.0, maxSpeed = maxPointSpeed)
+        }
+        var totalDistance = 0.0
+        var movingDistance = 0.0
+        var movingTimeSec = 0.0
+        var maxSpeed = 0.0
+        points.zipWithNext().forEach { (a, b) ->
+            val segment = a.segmentTo(b)
+            totalDistance += segment.distanceM
+            val pointSpeed = b.speedMps.takeIf { it.isReliableSpeed() } ?: 0.0
+            if (pointSpeed > maxSpeed) maxSpeed = pointSpeed
+            if (segment.isReliableForSpeed() && segment.speedMps.isReliableSpeed() && segment.speedMps >= MOVING_SPEED_THRESHOLD_MPS) {
+                movingDistance += segment.distanceM
+                movingTimeSec += segment.dtSec
+                if (segment.speedMps > maxSpeed) maxSpeed = segment.speedMps
+            }
+        }
+        val firstSpeed = points.first().speedMps.takeIf { it.isReliableSpeed() } ?: 0.0
+        if (firstSpeed > maxSpeed) maxSpeed = firstSpeed
+        return RideStats(
+            totalDistance = totalDistance,
+            avgSpeed = if (movingTimeSec > 0.0) movingDistance / movingTimeSec else 0.0,
+            maxSpeed = maxSpeed,
+        )
+    }
+
+    private fun GpsPoint.segmentTo(other: GpsPoint): TrackSegment {
+        val dtSec = (other.timestamp - timestamp) / 1000.0
+        val distance = GeoUtils.haversineMeters(lat, lng, other.lat, other.lng)
+        val speed = if (dtSec > 0.0) distance / dtSec else 0.0
+        return TrackSegment(distanceM = distance, dtSec = dtSec, speedMps = speed)
+    }
+
+    private fun TrackSegment.isReliableForSpeed(): Boolean =
+        dtSec in MIN_SEGMENT_DT_SEC..MAX_SEGMENT_DT_SEC &&
+            distanceM.isFinite() &&
+            distanceM <= MAX_REASONABLE_SPEED_MPS * dtSec
+
+    private fun Double.isReliableSpeed(): Boolean =
+        isFinite() && this in 0.0..MAX_REASONABLE_SPEED_MPS
+
     private fun buildPrompt(ride: Ride): String = """
         Analyze this cycling ride and provide professional coaching advice.
         Distance: ${formatDistanceMeters(ride.totalDistance)}
@@ -304,6 +378,14 @@ class TrackViewModel(
         private const val TRACK_POINT_MAX_ACCURACY_M = 40.0
         private const val GOOD_SIGNAL_MAX_ACCURACY_M = 25.0
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
+        private const val MIN_SEGMENT_DT_SEC = 0.5
+        private const val MAX_SEGMENT_DT_SEC = 10.0
+        private const val MOVING_SPEED_THRESHOLD_MPS = 0.8
+        private const val MAX_REASONABLE_SPEED_MPS = 55.0
+        private const val SEGMENT_SPEED_FLOOR_FACTOR = 0.85
+        private const val SPEED_DIVERGENCE_DELTA_MPS = 5.0
+        private const val SPEED_DIVERGENCE_RATIO = 1.8
+        private const val MAX_LOCATION_CLOCK_SKEW_MS = 2_000L
 
         fun factory(repo: RideRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
@@ -312,6 +394,18 @@ class TrackViewModel(
             }
     }
 }
+
+private data class TrackSegment(
+    val distanceM: Double,
+    val dtSec: Double,
+    val speedMps: Double,
+)
+
+private data class RideStats(
+    val totalDistance: Double,
+    val avgSpeed: Double,
+    val maxSpeed: Double,
+)
 
 fun formatDistanceMeters(meters: Double): String =
     if (meters < 1000) "${meters.toInt()}m" else String.format(Locale.US, "%.2fkm", meters / 1000.0)
