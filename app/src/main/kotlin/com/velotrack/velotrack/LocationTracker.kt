@@ -12,6 +12,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 
 class LocationTracker(
     context: Context,
@@ -22,11 +23,17 @@ class LocationTracker(
     private val fusedClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(appContext)
     private val locationManager: LocationManager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private var running = false
+    private var runningPrecise = true
+    private var currentLocationToken: CancellationTokenSource? = null
 
-    private val gmsRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-        .setMinUpdateIntervalMillis(800L)
-        .setWaitForAccurateLocation(false)
-        .build()
+    private fun gmsRequest(precise: Boolean): LocationRequest =
+        LocationRequest.Builder(
+            if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+            1000L,
+        )
+            .setMinUpdateIntervalMillis(800L)
+            .setWaitForAccurateLocation(false)
+            .build()
 
     private val gmsCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -39,17 +46,22 @@ class LocationTracker(
     }
 
     @SuppressLint("MissingPermission")
-    fun start() {
-        if (running) return
+    fun start(precise: Boolean) {
+        if (running && runningPrecise == precise) return
+        if (running) stop()
+        emitRecentKnownLocation()
         when (provider) {
-            MapProvider.AMAP -> startPlatformLocation()
-            MapProvider.GOOGLE_MAPS -> fusedClient.requestLocationUpdates(gmsRequest, gmsCallback, Looper.getMainLooper())
+            MapProvider.AMAP -> startPlatformLocation(precise)
+            MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise)
         }
+        runningPrecise = precise
         running = true
     }
 
     fun stop() {
         if (!running) return
+        currentLocationToken?.cancel()
+        currentLocationToken = null
         when (provider) {
             MapProvider.AMAP -> runCatching { locationManager.removeUpdates(platformListener) }
             MapProvider.GOOGLE_MAPS -> runCatching { fusedClient.removeLocationUpdates(gmsCallback) }
@@ -58,11 +70,27 @@ class LocationTracker(
     }
 
     @SuppressLint("MissingPermission")
-    private fun startPlatformLocation() {
+    private fun startGoogleLocation(precise: Boolean) {
+        fusedClient.lastLocation.addOnSuccessListener { location ->
+            if (location != null && location.isRecentEnough()) onLocation(location.toGpsPoint())
+        }
+        currentLocationToken = CancellationTokenSource().also { tokenSource ->
+            fusedClient.getCurrentLocation(
+                if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                tokenSource.token,
+            ).addOnSuccessListener { location ->
+                if (location != null) onLocation(location.toGpsPoint())
+            }
+        }
+        fusedClient.requestLocationUpdates(gmsRequest(precise), gmsCallback, Looper.getMainLooper())
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startPlatformLocation(precise: Boolean) {
         val minTimeMs = 1000L
         val minDistanceM = 1f
         val mainLooper = Looper.getMainLooper()
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+        if (precise && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             locationManager.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER,
                 minTimeMs,
@@ -82,6 +110,23 @@ class LocationTracker(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun emitRecentKnownLocation() {
+        val candidates = buildList {
+            add(runCatching { locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull())
+            add(runCatching { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull())
+            add(runCatching { locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) }.getOrNull())
+        }.filterNotNull()
+
+        candidates
+            .filter { it.isRecentEnough() }
+            .minWithOrNull(compareBy<Location> { if (it.hasAccuracy()) it.accuracy else Float.MAX_VALUE }.thenByDescending { it.time })
+            ?.let { onLocation(it.toGpsPoint()) }
+    }
+
+    private fun Location.isRecentEnough(): Boolean =
+        time > 0 && System.currentTimeMillis() - time <= RECENT_LOCATION_MAX_AGE_MS
+
     private fun Location.toGpsPoint(): GpsPoint =
         GpsPoint(
             lat = latitude,
@@ -91,4 +136,8 @@ class LocationTracker(
             altitude = if (hasAltitude()) altitude else null,
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
         )
+
+    private companion object {
+        const val RECENT_LOCATION_MAX_AGE_MS = 15 * 60 * 1000L
+    }
 }

@@ -146,23 +146,24 @@ class TrackViewModel(
     }
 
     fun onLocation(point: GpsPoint) {
-        if (point.accuracy > 40.0) return
+        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) return
         _uiState.update { s ->
             if (!s.isRecording || s.isPaused) return@update s
-            val points = s.livePoints + point
+            val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
+            val points = if (canUseForTrack) s.livePoints + point else s.livePoints
             s.copy(
                 livePoints = points,
                 mapCenterLat = point.lat,
                 mapCenterLng = point.lng,
-                currentSpeedMps = max(0.0, point.speedMps),
+                currentSpeedMps = if (canUseForTrack) max(0.0, point.speedMps) else s.currentSpeedMps,
                 currentAltitude = point.altitude,
-                signalLost = point.accuracy > 25.0,
+                signalLost = point.accuracy > GOOD_SIGNAL_MAX_ACCURACY_M,
             )
         }
     }
 
     fun restoreLastLocation(point: GpsPoint) {
-        if (point.accuracy > 40.0) return
+        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) return
         _uiState.update { s ->
             if (s.isRecording) {
                 s
@@ -263,6 +264,10 @@ class TrackViewModel(
     """.trimIndent()
 
     companion object {
+        private const val TRACK_POINT_MAX_ACCURACY_M = 40.0
+        private const val GOOD_SIGNAL_MAX_ACCURACY_M = 25.0
+        private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
+
         fun factory(repo: RideRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

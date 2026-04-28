@@ -264,11 +264,11 @@ private fun GooglePane(
 
     val focus = when {
         points.isEmpty() -> null
-        followLatestPosition -> points.last()
+        followLatestPosition -> null
         else -> points.first()
     }
     val latestTarget by rememberUpdatedState(
-        if (focus != null) GoogleLatLng(focus.lat, focus.lng) else GoogleLatLng(centerLat, centerLng),
+        if (followLatestPosition || focus == null) GoogleLatLng(centerLat, centerLng) else GoogleLatLng(focus.lat, focus.lng),
     )
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
@@ -608,11 +608,11 @@ private fun AmapPane(
     }
     val focus = when {
         points.isEmpty() -> null
-        followLatestPosition -> points.last()
+        followLatestPosition -> null
         else -> points.first()
     }
     val latestTarget by rememberUpdatedState(
-        if (focus != null) focus.toAmapLatLng() else wgs84ToAmapLatLng(centerLat, centerLng),
+        if (followLatestPosition || focus == null) wgs84ToAmapLatLng(centerLat, centerLng) else focus.toAmapLatLng(),
     )
     LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt, aMap) {
         val map = aMap ?: return@LaunchedEffect

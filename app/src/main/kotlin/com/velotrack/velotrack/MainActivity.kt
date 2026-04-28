@@ -106,10 +106,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasLocationPermission(): Boolean {
-        val fine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val coarse = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        return fine || coarse
+        return hasFineLocationPermission() || hasCoarseLocationPermission()
     }
+
+    private fun hasFineLocationPermission(): Boolean =
+        ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasCoarseLocationPermission(): Boolean =
+        ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     private fun requestLocationPermissions() {
         val permissions = buildList {
@@ -127,7 +131,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (shouldTrack && hasLocationPermission()) {
-            locationTracker.start()
+            locationTracker.start(precise = hasFineLocationPermission())
         } else if (!shouldTrack) {
             locationTracker.stop()
         }
