@@ -62,7 +62,7 @@ fun RecordingScreen(
             points = state.livePoints,
             modifier = Modifier.fillMaxSize(),
             followLatestPosition = true,
-            mapZoom = 16f,
+            mapZoom = DEFAULT_RECORDING_MAP_ZOOM,
             polylineWidth = 7f,
             darkMode = true,
             centerLat = state.mapCenterLat,

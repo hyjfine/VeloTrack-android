@@ -56,6 +56,7 @@ import kotlinx.coroutines.delay
 
 private val defaultLat = 39.9042
 private val defaultLng = 116.4074
+internal const val DEFAULT_RECORDING_MAP_ZOOM = 17f
 private const val RECENTER_DELAY_MS = 3000L
 private const val CAMERA_MIN_INTERVAL_MS = 2000L
 private const val CAMERA_MIN_DISTANCE_M = 15.0
@@ -177,7 +178,7 @@ fun MapPane(
     points: List<GpsPoint>,
     modifier: Modifier = Modifier,
     followLatestPosition: Boolean = true,
-    mapZoom: Float = 16f,
+    mapZoom: Float = DEFAULT_RECORDING_MAP_ZOOM,
     polylineWidth: Float = 5f,
     darkMode: Boolean = false,
     centerLat: Double = defaultLat,
@@ -272,11 +273,15 @@ private fun GooglePane(
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
     var isMapLoaded by remember { mutableStateOf(false) }
+    var hasUserAdjustedCamera by remember { mutableStateOf(false) }
     var lastUserGestureAt by remember { mutableStateOf(0L) }
     var lastCameraMoveAt by remember { mutableStateOf(0L) }
     var lastCameraLatLng by remember { mutableStateOf<GoogleLatLng?>(null) }
     fun markUserGesture() {
-        if (followLatestPositionState) lastUserGestureAt = System.currentTimeMillis()
+        if (followLatestPositionState) {
+            hasUserAdjustedCamera = true
+            lastUserGestureAt = System.currentTimeMillis()
+        }
     }
     fun notifyMapTouch(event: MotionEvent) {
         when (event.actionMasked) {
@@ -289,7 +294,7 @@ private fun GooglePane(
         }
     }
     suspend fun animateToTarget(target: GoogleLatLng, durationMs: Int) {
-        val zoom = if (followLatestPosition) cameraState.position.zoom else mapZoom
+        val zoom = if (followLatestPosition && hasUserAdjustedCamera) cameraState.position.zoom else mapZoom
         cameraState.animate(
             update = GoogleCameraUpdateFactory.newLatLngZoom(target, zoom),
             durationMs = durationMs,
@@ -421,6 +426,7 @@ private fun AmapPane(
     var finishMarker by remember { mutableStateOf<AmapMarker?>(null) }
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
+    var hasUserAdjustedCamera by remember { mutableStateOf(false) }
     var lastUserGestureAt by remember { mutableStateOf(0L) }
     var lastCameraMoveAt by remember { mutableStateOf(0L) }
     var lastCameraLatLng by remember { mutableStateOf<AmapLatLng?>(null) }
@@ -444,7 +450,10 @@ private fun AmapPane(
         )
     }
     fun markUserGesture() {
-        if (followLatestPositionState) lastUserGestureAt = System.currentTimeMillis()
+        if (followLatestPositionState) {
+            hasUserAdjustedCamera = true
+            lastUserGestureAt = System.currentTimeMillis()
+        }
     }
     fun notifyMapTouch(event: MotionEvent) {
         when (event.actionMasked) {
@@ -619,7 +628,7 @@ private fun AmapPane(
         if (followLatestPosition && lastCameraMoveAt > 0L && now - lastCameraMoveAt < CAMERA_MIN_INTERVAL_MS && movedMeters < CAMERA_MIN_DISTANCE_M) {
             return@LaunchedEffect
         }
-        val zoom = if (followLatestPosition) map.cameraPosition.zoom else mapZoom
+        val zoom = if (followLatestPosition && hasUserAdjustedCamera) map.cameraPosition.zoom else mapZoom
         map.animateCamera(CameraUpdateFactory.newLatLngZoom(latestTarget, zoom), 450L, null)
         lastCameraMoveAt = now
         lastCameraLatLng = latestTarget
@@ -630,7 +639,8 @@ private fun AmapPane(
         val gestureAt = lastUserGestureAt
         delay(RECENTER_DELAY_MS)
         if (lastUserGestureAt == gestureAt) {
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(latestTarget, map.cameraPosition.zoom), 650L, null)
+            val zoom = if (hasUserAdjustedCamera) map.cameraPosition.zoom else mapZoom
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(latestTarget, zoom), 650L, null)
             lastCameraMoveAt = System.currentTimeMillis()
             lastCameraLatLng = latestTarget
             lastUserGestureAt = 0L
