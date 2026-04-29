@@ -34,7 +34,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private val locationTracker: LocationTracker by lazy {
-        LocationTracker(this, mapProvider, ::dispatchLocation, viewModel::onLocationDebug)
+        LocationTracker(
+            this,
+            mapProvider,
+            ::dispatchLocation,
+            viewModel::onLocationDebug,
+            viewModel::onGnssStatus,
+        )
     }
 
     private var startCountdownAfterPermission = false

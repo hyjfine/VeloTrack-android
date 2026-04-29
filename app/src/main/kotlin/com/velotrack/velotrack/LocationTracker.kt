@@ -5,6 +5,8 @@ import android.content.Context
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.GnssStatus
+import android.os.Build
 import android.os.Looper
 import android.util.Log
 import com.amap.api.location.AMapLocation
@@ -24,6 +26,7 @@ class LocationTracker(
     private val provider: MapProvider,
     private val onLocation: (GpsPoint) -> Unit,
     private val onDebugEvent: (String) -> Unit = {},
+    private val onGnssStatus: (GnssSatelliteSnapshot) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val fusedClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(appContext)
@@ -33,6 +36,51 @@ class LocationTracker(
     private var currentLocationToken: CancellationTokenSource? = null
     private var amapClient: AMapLocationClient? = null
     private var platformFallbackStarted = false
+    private var gnssCallbackRegistered = false
+
+    private val gnssCallback: GnssStatus.Callback? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            object : GnssStatus.Callback() {
+                override fun onSatelliteStatusChanged(status: GnssStatus) {
+                    var visible = 0
+                    var inUse = 0
+                    var beidouVisible = 0
+                    var beidouInUse = 0
+                    var gpsInUse = 0
+                    var glonassInUse = 0
+                    var galileoInUse = 0
+                    val count = status.satelliteCount
+                    for (i in 0 until count) {
+                        val constellation = status.getConstellationType(i)
+                        val used = status.usedInFix(i)
+                        visible++
+                        if (used) inUse++
+                        when (constellation) {
+                            GnssStatus.CONSTELLATION_BEIDOU -> {
+                                beidouVisible++
+                                if (used) beidouInUse++
+                            }
+                            GnssStatus.CONSTELLATION_GPS -> if (used) gpsInUse++
+                            GnssStatus.CONSTELLATION_GLONASS -> if (used) glonassInUse++
+                            GnssStatus.CONSTELLATION_GALILEO -> if (used) galileoInUse++
+                        }
+                    }
+                    onGnssStatus(
+                        GnssSatelliteSnapshot(
+                            visible = visible,
+                            inUse = inUse,
+                            beidouVisible = beidouVisible,
+                            beidouInUse = beidouInUse,
+                            gpsInUse = gpsInUse,
+                            glonassInUse = glonassInUse,
+                            galileoInUse = galileoInUse,
+                        ),
+                    )
+                }
+            }
+        } else {
+            null
+        }
 
     private fun gmsRequest(precise: Boolean): LocationRequest =
         LocationRequest.Builder(
@@ -47,14 +95,20 @@ class LocationTracker(
         override fun onLocationResult(result: LocationResult) {
             result.lastLocation?.let {
                 onDebugEvent("GMS update acc=${it.accuracyText()}")
-                onLocation(it.toGpsPoint())
+                onLocation(it.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = true))
             }
         }
     }
 
     private val platformListener = LocationListener { location ->
         onDebugEvent("Platform ${location.provider} acc=${location.accuracyText()}")
-        onLocation(location.toGpsPoint())
+        val source = when (location.provider) {
+            LocationManager.GPS_PROVIDER -> GpsSource.PLATFORM_GPS
+            LocationManager.NETWORK_PROVIDER -> GpsSource.PLATFORM_NETWORK
+            LocationManager.PASSIVE_PROVIDER -> GpsSource.PLATFORM_PASSIVE
+            else -> GpsSource.UNKNOWN
+        }
+        onLocation(location.toGpsPoint(source, isGpsFix = source == GpsSource.PLATFORM_GPS))
     }
 
     private val amapListener = AMapLocationListener { location ->
@@ -77,6 +131,7 @@ class LocationTracker(
         runningPrecise = precise
         onDebugEvent("start provider=$provider precise=$precise")
         emitRecentKnownLocation()
+        registerGnssCallbackIfNeeded()
         when (provider) {
             MapProvider.AMAP -> startAmapLocation(precise)
             MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise)
@@ -89,6 +144,7 @@ class LocationTracker(
         onDebugEvent("stop provider=$provider")
         currentLocationToken?.cancel()
         currentLocationToken = null
+        unregisterGnssCallback()
         when (provider) {
             MapProvider.AMAP -> {
                 runCatching { locationManager.removeUpdates(platformListener) }
@@ -110,7 +166,7 @@ class LocationTracker(
         fusedClient.lastLocation.addOnSuccessListener { location ->
             if (location != null && location.isRecentEnough()) {
                 onDebugEvent("GMS last acc=${location.accuracyText()}")
-                onLocation(location.toGpsPoint())
+                onLocation(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = false))
             }
         }
         currentLocationToken = CancellationTokenSource().also { tokenSource ->
@@ -120,7 +176,7 @@ class LocationTracker(
             ).addOnSuccessListener { location ->
                 if (location != null) {
                     onDebugEvent("GMS current acc=${location.accuracyText()}")
-                    onLocation(location.toGpsPoint())
+                    onLocation(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = true))
                 }
             }
         }
@@ -160,7 +216,8 @@ class LocationTracker(
             isOnceLocationLatest = false
             isNeedAddress = false
             isMockEnable = false
-            isGpsFirst = false
+            // GNSS（含北斗）优先，提升速度精度；高精度模式下 30s 内有 GPS 即返 GPS。
+            isGpsFirst = precise
             isLocationCacheEnable = true
             isWifiScan = true
             isOffset = true
@@ -216,7 +273,14 @@ class LocationTracker(
             .minWithOrNull(compareBy<Location> { if (it.hasAccuracy()) it.accuracy else Float.MAX_VALUE }.thenByDescending { it.time })
             ?.let {
                 onDebugEvent("Platform recent ${it.provider} acc=${it.accuracyText()}")
-                onLocation(it.toGpsPoint())
+                val source = when (it.provider) {
+                    LocationManager.GPS_PROVIDER -> GpsSource.PLATFORM_GPS
+                    LocationManager.NETWORK_PROVIDER -> GpsSource.PLATFORM_NETWORK
+                    LocationManager.PASSIVE_PROVIDER -> GpsSource.PLATFORM_PASSIVE
+                    else -> GpsSource.UNKNOWN
+                }
+                // last-known 不算实时，速度不参与跟踪。
+                onLocation(it.toGpsPoint(source, isGpsFix = false))
             }
     }
 
@@ -226,7 +290,7 @@ class LocationTracker(
     private fun Location.accuracyText(): String =
         if (hasAccuracy()) "${accuracy.toInt()}m" else "unknown"
 
-    private fun Location.toGpsPoint(): GpsPoint =
+    private fun Location.toGpsPoint(source: GpsSource, isGpsFix: Boolean): GpsPoint =
         GpsPoint(
             lat = latitude,
             lng = longitude,
@@ -234,6 +298,8 @@ class LocationTracker(
             speedMps = if (hasSpeed()) speed.toDouble() else 0.0,
             altitude = if (hasAltitude()) altitude else null,
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
+            source = source,
+            isGpsFix = isGpsFix,
         )
 
     private fun AMapLocation.toGpsPoint(): GpsPoint {
@@ -242,17 +308,64 @@ class LocationTracker(
         } else {
             CoordinateTransform.Coordinate(latitude, longitude)
         }
+        // AMap locationType: 1=GPS, 2=前次位置, 4=缓存, 5=WiFi, 6=基站, 8=离线; 仅 GPS 速度可信
+        val source = when (locationType) {
+            AMapLocation.LOCATION_TYPE_GPS -> GpsSource.AMAP_GPS
+            AMapLocation.LOCATION_TYPE_WIFI -> GpsSource.AMAP_WIFI
+            AMapLocation.LOCATION_TYPE_CELL -> GpsSource.AMAP_CELL
+            AMapLocation.LOCATION_TYPE_LAST_LOCATION_CACHE,
+            AMapLocation.LOCATION_TYPE_FIX_CACHE,
+            -> GpsSource.AMAP_CACHE
+            AMapLocation.LOCATION_TYPE_SAME_REQ -> GpsSource.AMAP_NETWORK
+            else -> GpsSource.AMAP_OTHER
+        }
+        val isGpsFix = locationType == AMapLocation.LOCATION_TYPE_GPS
         return GpsPoint(
             lat = normalized.lat,
             lng = normalized.lng,
             timestamp = time.takeIf { it > 0 } ?: System.currentTimeMillis(),
-            speedMps = if (hasSpeed()) speed.toDouble() else 0.0,
+            // 非 GPS 来源的 speed 在 AMap SDK 中常常无意义；仅 GPS 时透传。
+            speedMps = if (isGpsFix && hasSpeed()) speed.toDouble() else 0.0,
             altitude = if (hasAltitude()) altitude else null,
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
+            source = source,
+            isGpsFix = isGpsFix,
         )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun registerGnssCallbackIfNeeded() {
+        if (gnssCallbackRegistered) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val callback = gnssCallback ?: return
+        runCatching {
+            locationManager.registerGnssStatusCallback(callback, android.os.Handler(Looper.getMainLooper()))
+            gnssCallbackRegistered = true
+        }.onFailure {
+            onDebugEvent("GNSS register failed: ${it.message ?: it::class.java.simpleName}")
+        }
+    }
+
+    private fun unregisterGnssCallback() {
+        if (!gnssCallbackRegistered) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val callback = gnssCallback ?: return
+        runCatching { locationManager.unregisterGnssStatusCallback(callback) }
+        gnssCallbackRegistered = false
     }
 
     private companion object {
         const val RECENT_LOCATION_MAX_AGE_MS = 15 * 60 * 1000L
     }
 }
+
+data class GnssSatelliteSnapshot(
+    val visible: Int,
+    val inUse: Int,
+    val beidouVisible: Int,
+    val beidouInUse: Int,
+    val gpsInUse: Int,
+    val glonassInUse: Int,
+    val galileoInUse: Int,
+)
+

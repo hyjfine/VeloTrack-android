@@ -168,6 +168,19 @@ private fun DebugStatusPanel(
                 DebugLine("accuracy", state.lastLocationAccuracyM?.let { "${it.toInt()}m" } ?: "unknown")
                 DebugLine("track point", state.lastLocationCountedInTrack.toString())
                 DebugLine("signalLost", state.signalLost.toString())
+                DebugLine(
+                    "speed",
+                    "ui=${formatSpeedKmh(state.currentSpeedMps)}kph " +
+                        "raw=" + (state.lastRawSpeedMps?.let { String.format(java.util.Locale.US, "%.2fmps/%.1fkph", it, it * 3.6) } ?: "-"),
+                )
+                DebugLine("speed src", state.lastSpeedSource ?: "-")
+                DebugLine(
+                    "gnss",
+                    state.gnss?.let {
+                        "use=${it.inUse}/${it.visible} bds=${it.beidouInUse}/${it.beidouVisible} " +
+                            "gps=${it.gpsInUse} glo=${it.glonassInUse} gal=${it.galileoInUse}"
+                    } ?: "-",
+                )
                 DebugLine("reason", state.lastLocationDropReason ?: "-")
                 DebugLine("event", state.locationDebugMessage ?: "-")
             }
