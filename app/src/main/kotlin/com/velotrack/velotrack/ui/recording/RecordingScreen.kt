@@ -63,6 +63,7 @@ fun RecordingScreen(
     onEndHold: () -> Unit,
 ) {
     val bottomPad = (VeloDimens.gaugeBottom + navBottom.value).dp
+    val deviceHeadingDeg = rememberDeviceHeadingDegrees(enabled = state.isRecording)
     Box(Modifier.fillMaxSize()) {
         MapPane(
             provider = provider,
@@ -74,6 +75,8 @@ fun RecordingScreen(
             darkMode = true,
             centerLat = state.mapCenterLat,
             centerLng = state.mapCenterLng,
+            showRouteHeadArrow = state.isRecording,
+            routeHeadHeadingDeg = deviceHeadingDeg,
         )
         Row(
             Modifier

@@ -67,6 +67,15 @@ private const val FINISH_MARKER_HEIGHT_DP = 38f
 private const val FINISH_MARKER_POLE_X_DP = 9f
 private const val FINISH_MARKER_ANCHOR_U = FINISH_MARKER_POLE_X_DP / FINISH_MARKER_WIDTH_DP
 private const val FINISH_MARKER_ANCHOR_V = 0.95f
+private const val ROUTE_HEAD_ARROW_SIZE_DP = 26f
+private const val ROUTE_HEAD_DOT_RADIUS_DP = 6.5f
+private const val ROUTE_HEAD_ANCHOR_U = 0.5f
+private const val ROUTE_HEAD_ANCHOR_V = 0.38f
+private const val ROUTE_HEAD_MIN_DISTANCE_M = 4.0
+private const val ROUTE_SHADOW_Z_INDEX = 20f
+private const val ROUTE_LINE_Z_INDEX = 21f
+private const val ROUTE_HEAD_ARROW_Z_INDEX = 24f
+private const val ROUTE_ENDPOINT_Z_INDEX = 30f
 private const val GOOGLE_DARK_MAP_STYLE = """
 [
   {"elementType":"geometry","stylers":[{"color":"#24262B"}]},
@@ -153,10 +162,90 @@ private fun finishEndpointMarkerBitmap(
     return bitmap
 }
 
+private fun routeHeadArrowBitmap(
+    fillColor: Int,
+    strokeColor: Int,
+    density: Float,
+): Bitmap {
+    val size = ROUTE_HEAD_ARROW_SIZE_DP * density
+    val strokeWidth = 1.7f * density
+    val bitmap = createBitmap(size.toInt(), size.toInt())
+    val canvas = Canvas(bitmap)
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.Black.copy(alpha = 0.22f).toArgb()
+        style = Paint.Style.FILL
+    }
+    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = fillColor
+        style = Paint.Style.FILL
+    }
+    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = strokeColor
+        style = Paint.Style.STROKE
+        this.strokeWidth = strokeWidth
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+    }
+    val dotStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = strokeColor
+        style = Paint.Style.FILL
+    }
+    val cx = size / 2f
+    val tailTipY = size - 2.5f * density
+    val tailBaseY = 13.2f * density
+    val halfWidth = 7.0f * density
+    val dotRadius = ROUTE_HEAD_DOT_RADIUS_DP * density
+    val dotCy = size * ROUTE_HEAD_ANCHOR_V
+    val trianglePath = Path().apply {
+        // Default heading is north: the circle is the forward head, triangle is the trailing tail.
+        moveTo(cx - halfWidth, tailBaseY)
+        lineTo(cx + halfWidth, tailBaseY)
+        lineTo(cx, tailTipY)
+        close()
+    }
+    canvas.drawPath(trianglePath, shadowPaint)
+    canvas.drawPath(trianglePath, fillPaint)
+    canvas.drawPath(trianglePath, strokePaint)
+    canvas.drawCircle(cx, dotCy + 0.8f * density, dotRadius + 1.5f * density, shadowPaint)
+    canvas.drawCircle(cx, dotCy, dotRadius + strokeWidth, dotStrokePaint)
+    canvas.drawCircle(cx, dotCy, dotRadius, fillPaint)
+    return bitmap
+}
+
+private data class RouteHead(
+    val point: GpsPoint,
+    val bearingDeg: Float,
+)
+
 private fun hasDistinctRoutePoints(points: List<GpsPoint>): Boolean {
     val first = points.firstOrNull() ?: return false
     return points.any { it.lat != first.lat || it.lng != first.lng }
 }
+
+private fun routeHeadFromPoints(points: List<GpsPoint>): RouteHead? {
+    val last = points.lastOrNull() ?: return null
+    for (i in points.size - 2 downTo 0) {
+        val candidate = points[i]
+        val distance = GeoUtils.haversineMeters(candidate.lat, candidate.lng, last.lat, last.lng)
+        if (distance >= ROUTE_HEAD_MIN_DISTANCE_M) {
+            return RouteHead(
+                point = last,
+                bearingDeg = GeoUtils.bearingDegrees(candidate.lat, candidate.lng, last.lat, last.lng),
+            )
+        }
+    }
+    return null
+}
+
+private fun routeHeadFromPoints(points: List<GpsPoint>, headingDeg: Float?): RouteHead? {
+    val last = points.lastOrNull() ?: return null
+    if (headingDeg != null) {
+        return RouteHead(last, normalizeDegrees(headingDeg))
+    }
+    return routeHeadFromPoints(points)
+}
+
+private fun normalizeDegrees(value: Float): Float = ((value % 360f) + 360f) % 360f
 
 private fun wgs84ToAmapLatLng(lat: Double, lng: Double): AmapLatLng {
     val coordinate = CoordinateTransform.wgs84ToGcj02(lat, lng)
@@ -169,6 +258,8 @@ private fun GpsPoint.toAmapLatLng(): AmapLatLng = wgs84ToAmapLatLng(lat, lng)
  * @param followLatestPosition `true`：相机跟随最后一个点（录制）；`false`：固定首点 + [mapZoom]（详情预览）
  * @param polylineWidth 与 h5 `weight={5}` / design-tokens `polylineWeight` 一致
  * @param showEndpointMarkers 是否展示轨迹起点 / 终点标识，默认关闭以避免影响录制页
+ * @param showRouteHeadArrow 是否展示轨迹头部方向箭头，录制页可开启
+ * @param routeHeadHeadingDeg 手机实时朝向，非 null 时优先用于箭头旋转；null 时回退到轨迹方向
  * @param fitRouteBounds 是否在地图加载后适配整条轨迹视野，默认关闭
  * @param onMapTouchingChanged 地图触摸状态回调，可用于详情页临时禁用外层滚动
  */
@@ -184,6 +275,8 @@ fun MapPane(
     centerLat: Double = defaultLat,
     centerLng: Double = defaultLng,
     showEndpointMarkers: Boolean = false,
+    showRouteHeadArrow: Boolean = false,
+    routeHeadHeadingDeg: Float? = null,
     fitRouteBounds: Boolean = false,
     onMapTouchingChanged: (Boolean) -> Unit = {},
 ) {
@@ -198,6 +291,8 @@ fun MapPane(
             centerLat = centerLat,
             centerLng = centerLng,
             showEndpointMarkers = showEndpointMarkers,
+            showRouteHeadArrow = showRouteHeadArrow,
+            routeHeadHeadingDeg = routeHeadHeadingDeg,
             fitRouteBounds = fitRouteBounds,
             onMapTouchingChanged = onMapTouchingChanged,
         )
@@ -211,6 +306,8 @@ fun MapPane(
             centerLat = centerLat,
             centerLng = centerLng,
             showEndpointMarkers = showEndpointMarkers,
+            showRouteHeadArrow = showRouteHeadArrow,
+            routeHeadHeadingDeg = routeHeadHeadingDeg,
             fitRouteBounds = fitRouteBounds,
             onMapTouchingChanged = onMapTouchingChanged,
         )
@@ -229,6 +326,8 @@ private fun GooglePane(
     centerLat: Double,
     centerLng: Double,
     showEndpointMarkers: Boolean,
+    showRouteHeadArrow: Boolean,
+    routeHeadHeadingDeg: Float?,
     fitRouteBounds: Boolean,
     onMapTouchingChanged: (Boolean) -> Unit,
 ) {
@@ -260,6 +359,18 @@ private fun GooglePane(
                 density = markerDensity,
             ),
         )
+    }
+    val routeHeadArrowIcon = remember(markerDensity) {
+        GoogleBitmapDescriptorFactory.fromBitmap(
+            routeHeadArrowBitmap(
+                fillColor = VeloColors.accent.toArgb(),
+                strokeColor = VeloColors.foreground.toArgb(),
+                density = markerDensity,
+            ),
+        )
+    }
+    val routeHead = remember(points, showRouteHeadArrow, routeHeadHeadingDeg) {
+        if (showRouteHeadArrow) routeHeadFromPoints(points, routeHeadHeadingDeg) else null
     }
 
     val focus = when {
@@ -366,11 +477,13 @@ private fun GooglePane(
                 points = polyline,
                 color = polyShadowColor,
                 width = polylineWidth + 5f,
+                zIndex = ROUTE_SHADOW_Z_INDEX,
             )
             Polyline(
                 points = polyline,
                 color = polyColor,
                 width = polylineWidth,
+                zIndex = ROUTE_LINE_Z_INDEX,
             )
             if (showEndpointMarkers) {
                 val start = polyline.first()
@@ -384,7 +497,7 @@ private fun GooglePane(
                     icon = startMarkerIcon,
                     title = "Start",
                     contentDescription = "Route start",
-                    zIndex = 10f,
+                    zIndex = ROUTE_ENDPOINT_Z_INDEX,
                 )
                 Marker(
                     state = rememberMarkerState(
@@ -395,7 +508,22 @@ private fun GooglePane(
                     icon = finishMarkerIcon,
                     title = "Finish",
                     contentDescription = "Route finish",
-                    zIndex = 10f,
+                    zIndex = ROUTE_ENDPOINT_Z_INDEX,
+                )
+            }
+            if (routeHead != null) {
+                Marker(
+                    state = rememberMarkerState(
+                        key = "route-head-${routeHead.point.lat},${routeHead.point.lng}",
+                        position = GoogleLatLng(routeHead.point.lat, routeHead.point.lng),
+                    ),
+                    anchor = Offset(ROUTE_HEAD_ANCHOR_U, ROUTE_HEAD_ANCHOR_V),
+                    icon = routeHeadArrowIcon,
+                    rotation = routeHead.bearingDeg,
+                    flat = true,
+                    title = "Heading",
+                    contentDescription = "Route heading",
+                    zIndex = ROUTE_HEAD_ARROW_Z_INDEX,
                 )
             }
         }
@@ -413,6 +541,8 @@ private fun AmapPane(
     centerLat: Double,
     centerLng: Double,
     showEndpointMarkers: Boolean,
+    showRouteHeadArrow: Boolean,
+    routeHeadHeadingDeg: Float?,
     fitRouteBounds: Boolean,
     onMapTouchingChanged: (Boolean) -> Unit,
 ) {
@@ -424,6 +554,7 @@ private fun AmapPane(
     var routePolyline by remember { mutableStateOf<AmapPolyline?>(null) }
     var startMarker by remember { mutableStateOf<AmapMarker?>(null) }
     var finishMarker by remember { mutableStateOf<AmapMarker?>(null) }
+    var routeHeadMarker by remember { mutableStateOf<AmapMarker?>(null) }
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
     var hasUserAdjustedCamera by remember { mutableStateOf(false) }
@@ -449,6 +580,15 @@ private fun AmapPane(
             ),
         )
     }
+    val routeHeadArrowIcon = remember(markerDensity) {
+        AmapBitmapDescriptorFactory.fromBitmap(
+            routeHeadArrowBitmap(
+                fillColor = VeloColors.accent.toArgb(),
+                strokeColor = VeloColors.foreground.toArgb(),
+                density = markerDensity,
+            ),
+        )
+    }
     fun markUserGesture() {
         if (followLatestPositionState) {
             hasUserAdjustedCamera = true
@@ -470,6 +610,10 @@ private fun AmapPane(
         finishMarker?.remove()
         startMarker = null
         finishMarker = null
+    }
+    fun removeRouteHeadMarker() {
+        routeHeadMarker?.remove()
+        routeHeadMarker = null
     }
 
     val mapView = remember {
@@ -511,6 +655,7 @@ private fun AmapPane(
         onDispose {
             lifecycle.removeObserver(observer)
             removeEndpointMarkers()
+            removeRouteHeadMarker()
             mapView.onPause()
             mapView.onDestroy()
         }
@@ -540,17 +685,21 @@ private fun AmapPane(
                 AmapPolylineOptions()
                     .addAll(path)
                     .color(shadowArgb)
-                    .width((polylineWidth + 5f) * pxPerDp),
+                        .width((polylineWidth + 5f) * pxPerDp)
+                        .zIndex(ROUTE_SHADOW_Z_INDEX),
             )
             routePolyline = map.addPolyline(
                 AmapPolylineOptions()
                     .addAll(path)
                     .color(argb)
-                    .width(polylineWidth * pxPerDp),
+                        .width(polylineWidth * pxPerDp)
+                        .zIndex(ROUTE_LINE_Z_INDEX),
             )
         } else {
             shadowPolyline?.points = path
             routePolyline?.points = path
+                shadowPolyline?.zIndex = ROUTE_SHADOW_Z_INDEX
+                routePolyline?.zIndex = ROUTE_LINE_Z_INDEX
         }
     }
     LaunchedEffect(points, aMap, fitRouteBounds, markerDensity) {
@@ -581,13 +730,13 @@ private fun AmapPane(
                     .icon(startMarkerIcon)
                     .anchor(0.5f, 0.5f)
                     .title("Start")
-                    .zIndex(10f),
+                    .zIndex(ROUTE_ENDPOINT_Z_INDEX),
             )
         } else {
             currentStartMarker.position = start
             currentStartMarker.setIcon(startMarkerIcon)
             currentStartMarker.setVisible(true)
-            currentStartMarker.setZIndex(10f)
+            currentStartMarker.setZIndex(ROUTE_ENDPOINT_Z_INDEX)
         }
         val currentFinishMarker = finishMarker
         if (currentFinishMarker == null) {
@@ -597,13 +746,40 @@ private fun AmapPane(
                     .icon(finishMarkerIcon)
                     .anchor(FINISH_MARKER_ANCHOR_U, FINISH_MARKER_ANCHOR_V)
                     .title("Finish")
-                    .zIndex(10f),
+                    .zIndex(ROUTE_ENDPOINT_Z_INDEX),
             )
         } else {
             currentFinishMarker.position = finish
             currentFinishMarker.setIcon(finishMarkerIcon)
             currentFinishMarker.setVisible(true)
-            currentFinishMarker.setZIndex(10f)
+            currentFinishMarker.setZIndex(ROUTE_ENDPOINT_Z_INDEX)
+        }
+    }
+    LaunchedEffect(points, aMap, showRouteHeadArrow, routeHeadHeadingDeg, routeHeadArrowIcon) {
+        val map = aMap ?: return@LaunchedEffect
+        val head = if (showRouteHeadArrow) routeHeadFromPoints(points, routeHeadHeadingDeg) else null
+        if (head == null) {
+            removeRouteHeadMarker()
+            return@LaunchedEffect
+        }
+        val position = head.point.toAmapLatLng()
+        val current = routeHeadMarker
+        if (current == null) {
+            routeHeadMarker = map.addMarker(
+                AmapMarkerOptions()
+                    .position(position)
+                    .icon(routeHeadArrowIcon)
+                    .anchor(ROUTE_HEAD_ANCHOR_U, ROUTE_HEAD_ANCHOR_V)
+                    .rotateAngle(head.bearingDeg)
+                    .title("Heading")
+                    .zIndex(ROUTE_HEAD_ARROW_Z_INDEX),
+            )
+        } else {
+            current.position = position
+            current.setIcon(routeHeadArrowIcon)
+            current.setRotateAngle(head.bearingDeg)
+            current.setVisible(true)
+            current.setZIndex(ROUTE_HEAD_ARROW_Z_INDEX)
         }
     }
     val focus = when {

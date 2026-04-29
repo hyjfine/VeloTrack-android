@@ -18,4 +18,14 @@ object GeoUtils {
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
         return r * c
     }
+
+    /** Initial bearing in degrees: 0=north, 90=east, 180=south, 270=west. */
+    fun bearingDegrees(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): Float {
+        val phi1 = Math.toRadians(fromLat)
+        val phi2 = Math.toRadians(toLat)
+        val dLambda = Math.toRadians(toLon - fromLon)
+        val y = sin(dLambda) * cos(phi2)
+        val x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dLambda)
+        return ((Math.toDegrees(atan2(y, x)) + 360.0) % 360.0).toFloat()
+    }
 }
