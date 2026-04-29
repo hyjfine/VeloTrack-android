@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.velotrack.velotrack.ui.VeloTheme
@@ -34,8 +35,18 @@ class MainActivity : ComponentActivity() {
         LocationTracker(this, mapProvider, ::dispatchLocation, viewModel::onLocationDebug)
     }
 
+    private var startCountdownAfterPermission = false
+
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            val shouldBeginStartCountdown = startCountdownAfterPermission &&
+                permissions.values.any { it } &&
+                viewModel.uiState.value.view == AppView.RECORDING &&
+                !viewModel.uiState.value.isRecording
+            startCountdownAfterPermission = false
+            if (shouldBeginStartCountdown) {
+                viewModel.beginStartCountdown()
+            }
             syncLocationSubscription()
         }
 
@@ -52,11 +63,15 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(state.isRecording, state.isPaused) {
                     syncLocationSubscription()
                 }
+                LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
+                    syncKeepScreenOn()
+                }
                 VeloMainScreen(
                     state = state,
                     provider = mapProvider,
                     debugPermissions = locationPermissionSnapshot(),
-                    onStartRecording = { viewModel.startRecording() },
+                    onStartRecording = { requestStartCountdown() },
+                    onCancelStartCountdown = { viewModel.cancelStartCountdown() },
                     onTogglePause = { viewModel.togglePause() },
                     onStopRecording = { viewModel.stopRecording() },
                     onBeginHold = { viewModel.beginHold() },
@@ -79,12 +94,20 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         enableAdaptiveHighRefreshRate()
+        syncKeepScreenOn()
         syncLocationSubscription()
     }
 
     override fun onPause() {
         super.onPause()
+        viewModel.cancelStartCountdown()
+        setKeepScreenOn(false)
         locationTracker.stop()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        startCountdownAfterPermission = false
     }
 
     private fun dispatchLocation(point: GpsPoint) {
@@ -128,6 +151,30 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         permissionLauncher.launch(permissions.toTypedArray())
+    }
+
+    private fun requestStartCountdown() {
+        val state = viewModel.uiState.value
+        if (state.isRecording || state.startCountdownSeconds != null) return
+        if (!hasLocationPermission()) {
+            startCountdownAfterPermission = true
+            requestLocationPermissions()
+            return
+        }
+        viewModel.beginStartCountdown()
+    }
+
+    private fun syncKeepScreenOn() {
+        val state = viewModel.uiState.value
+        setKeepScreenOn(state.isRecording || state.startCountdownSeconds != null)
+    }
+
+    private fun setKeepScreenOn(enabled: Boolean) {
+        if (enabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     private fun syncLocationSubscription() {

@@ -19,6 +19,7 @@ data class TrackUiState(
     val view: AppView = AppView.RECORDING,
     val isRecording: Boolean = false,
     val isPaused: Boolean = false,
+    val startCountdownSeconds: Int? = null,
     val isHolding: Boolean = false,
     val holdVersion: Int = 0,
     val signalLost: Boolean = false,
@@ -48,6 +49,7 @@ class TrackViewModel(
     val uiState: StateFlow<TrackUiState> = _uiState
 
     private var elapsedTicker: Job? = null
+    private var startCountdownJob: Job? = null
     private var recordingStartAt = 0L
     private var accumulatedElapsed = 0L
 
@@ -56,10 +58,49 @@ class TrackViewModel(
     }
 
     fun setView(view: AppView) {
+        if (view != AppView.RECORDING) {
+            cancelStartCountdown()
+        }
         _uiState.update { it.copy(view = view) }
     }
 
+    fun beginStartCountdown() {
+        val s = _uiState.value
+        if (s.isRecording || s.startCountdownSeconds != null) return
+        startCountdownJob?.cancel()
+        startCountdownJob = viewModelScope.launch {
+            for (seconds in START_COUNTDOWN_SECONDS downTo 1) {
+                _uiState.update {
+                    it.copy(
+                        startCountdownSeconds = seconds,
+                        isPaused = false,
+                        isHolding = false,
+                        elapsedMs = 0L,
+                        currentSpeedMps = 0.0,
+                        signalLost = false,
+                        errorMessage = null,
+                    )
+                }
+                delay(1000)
+            }
+            startCountdownJob = null
+            startRecordingNow()
+        }
+    }
+
+    fun cancelStartCountdown() {
+        startCountdownJob?.cancel()
+        startCountdownJob = null
+        if (_uiState.value.startCountdownSeconds != null) {
+            _uiState.update { it.copy(startCountdownSeconds = null, isHolding = false) }
+        }
+    }
+
     fun startRecording() {
+        beginStartCountdown()
+    }
+
+    private fun startRecordingNow() {
         if (_uiState.value.isRecording) return
         val now = System.currentTimeMillis()
         recordingStartAt = now
@@ -68,6 +109,8 @@ class TrackViewModel(
             it.copy(
                 isRecording = true,
                 isPaused = false,
+                startCountdownSeconds = null,
+                isHolding = false,
                 elapsedMs = 0L,
                 livePoints = emptyList(),
                 currentSpeedMps = 0.0,
@@ -82,7 +125,7 @@ class TrackViewModel(
 
     fun togglePause() {
         val s = _uiState.value
-        if (!s.isRecording) return
+        if (!s.isRecording || s.startCountdownSeconds != null) return
         if (!s.isPaused) {
             accumulatedElapsed += (System.currentTimeMillis() - recordingStartAt)
             elapsedTicker?.cancel()
@@ -96,7 +139,10 @@ class TrackViewModel(
 
     fun stopRecording() {
         val s = _uiState.value
-        if (!s.isRecording) return
+        if (!s.isRecording) {
+            cancelStartCountdown()
+            return
+        }
         if (!s.isPaused) {
             accumulatedElapsed += (System.currentTimeMillis() - recordingStartAt)
         }
@@ -127,6 +173,7 @@ class TrackViewModel(
                 it.copy(
                     isRecording = false,
                     isPaused = false,
+                    startCountdownSeconds = null,
                     isHolding = false,
                     elapsedMs = 0L,
                     livePoints = emptyList(),
@@ -143,6 +190,7 @@ class TrackViewModel(
     }
 
     fun beginHold() {
+        if (!_uiState.value.isRecording) return
         _uiState.update { it.copy(isHolding = true, holdVersion = it.holdVersion + 1) }
     }
 
@@ -222,10 +270,12 @@ class TrackViewModel(
     }
 
     fun openRide(ride: Ride) {
+        cancelStartCountdown()
         _uiState.update { it.copy(selectedRide = ride, view = AppView.DETAIL, aiAnalysis = null) }
     }
 
     fun backFromDetail() {
+        cancelStartCountdown()
         _uiState.update { it.copy(view = AppView.HISTORY, selectedRide = null, aiAnalysis = null) }
     }
 
@@ -304,6 +354,7 @@ class TrackViewModel(
         private const val TRACK_POINT_MAX_ACCURACY_M = 40.0
         private const val GOOD_SIGNAL_MAX_ACCURACY_M = 25.0
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
+        private const val START_COUNTDOWN_SECONDS = 3
 
         fun factory(repo: RideRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

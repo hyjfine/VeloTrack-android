@@ -56,6 +56,7 @@ fun RecordingScreen(
     debugPermissions: LocationPermissionSnapshot = LocationPermissionSnapshot(),
     navBottom: androidx.compose.ui.unit.Dp,
     onStartRecording: () -> Unit,
+    onCancelStartCountdown: () -> Unit,
     onTogglePause: () -> Unit,
     onStopRecording: () -> Unit,
     onBeginHold: () -> Unit,
@@ -84,6 +85,7 @@ fun RecordingScreen(
         ) {
             HudStatusCard(
                 title = when {
+                    state.startCountdownSeconds != null -> "READY"
                     state.isRecording && state.signalLost -> "SIGNAL LOST"
                     state.isRecording -> "TRACKING"
                     else -> "GPS IDLE"
@@ -120,6 +122,7 @@ fun RecordingScreen(
                 .padding(horizontal = VeloDimens.sidePadding.dp)
                 .padding(bottom = bottomPad),
             onStartRecording = onStartRecording,
+            onCancelStartCountdown = onCancelStartCountdown,
             onTogglePause = onTogglePause,
             onStopRecording = onStopRecording,
             onBeginHold = onBeginHold,
@@ -154,6 +157,7 @@ private fun DebugStatusPanel(
                 Spacer(Modifier.height(8.dp))
                 DebugLine("provider", provider.displayName)
                 DebugLine("recording", "${state.isRecording} paused=${state.isPaused}")
+                DebugLine("countdown", state.startCountdownSeconds?.toString() ?: "-")
                 DebugLine("permission", "any=${permissions.any} fine=${permissions.fine} coarse=${permissions.coarse}")
                 DebugLine("center", "${formatDebugCoord(state.mapCenterLat)}, ${formatDebugCoord(state.mapCenterLng)}")
                 DebugLine("points", state.livePoints.size.toString())
@@ -253,17 +257,22 @@ private fun MainGaugeCard(
     state: TrackUiState,
     modifier: Modifier = Modifier,
     onStartRecording: () -> Unit,
+    onCancelStartCountdown: () -> Unit,
     onTogglePause: () -> Unit,
     onStopRecording: () -> Unit,
     onBeginHold: () -> Unit,
     onEndHold: () -> Unit,
 ) {
+    val countdownSeconds = state.startCountdownSeconds
+    val isCountingDown = countdownSeconds != null
     val btnBg = when {
+        isCountingDown -> VeloColors.accent
         !state.isRecording -> VeloColors.accent
         state.isPaused -> VeloColors.warn
         else -> VeloColors.foreground
     }
     val btnFg = when {
+        isCountingDown -> VeloColors.foreground
         !state.isRecording -> VeloColors.foreground
         state.isPaused -> Color.White
         else -> VeloColors.accent
@@ -314,17 +323,22 @@ private fun MainGaugeCard(
             Box(
                 Modifier
                     .width(78.dp)
-                    .height(64.dp),
+                    .height(78.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
                     modifier = Modifier
-                        .size(62.dp)
+                        .size(72.dp)
                         .clip(CircleShape)
                         .background(btnBg)
-                        .pointerInput(state.isRecording) {
+                        .pointerInput(state.isRecording, isCountingDown) {
                             detectTapGestures(
                                 onPress = {
+                                    if (isCountingDown) {
+                                        tapFeedback()
+                                        onCancelStartCountdown()
+                                        return@detectTapGestures
+                                    }
                                     if (!state.isRecording) {
                                         tapFeedback()
                                         onStartRecording()
@@ -352,16 +366,23 @@ private fun MainGaugeCard(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        imageVector = when {
-                            !state.isRecording -> Icons.Filled.PlayArrow
-                            state.isPaused -> Icons.Filled.PlayArrow
-                            else -> Icons.Filled.Pause
-                        },
-                        contentDescription = null,
-                        tint = btnFg,
-                        modifier = Modifier.size(28.dp),
-                    )
+                    if (countdownSeconds != null) {
+                        Text(
+                            text = countdownSeconds.toString(),
+                            style = tabularTextStyle(30.sp, FontWeight.Bold, btnFg),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = when {
+                                !state.isRecording -> Icons.Filled.PlayArrow
+                                state.isPaused -> Icons.Filled.PlayArrow
+                                else -> Icons.Filled.Pause
+                            },
+                            contentDescription = null,
+                            tint = btnFg,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                 }
                 if (state.isRecording) {
                     Text(

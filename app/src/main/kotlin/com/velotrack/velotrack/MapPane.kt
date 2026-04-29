@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 
 private val defaultLat = 39.9042
 private val defaultLng = 116.4074
-internal const val DEFAULT_RECORDING_MAP_ZOOM = 17f
+internal const val DEFAULT_RECORDING_MAP_ZOOM = 16f
 private const val RECENTER_DELAY_MS = 3000L
 private const val CAMERA_MIN_INTERVAL_MS = 2000L
 private const val CAMERA_MIN_DISTANCE_M = 15.0
