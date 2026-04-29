@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +28,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -53,7 +51,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
@@ -80,52 +77,6 @@ fun DetailScreen(
             .background(VeloColors.background)
             .verticalScroll(scroll, enabled = !isMapTouching),
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(VeloColors.detailHeaderBg),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 32.dp),
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
-                    color = VeloColors.background,
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(VeloDimens.radiusSm.dp))
-                        .tapFeedbackClickable { onBack() },
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                            contentDescription = "Back",
-                            tint = VeloColors.gray400,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .rotate(180f),
-                        )
-                    }
-                }
-                Text(
-                    "SESSION DETAILS",
-                    style = tabularTextStyle(12.sp, FontWeight.Bold, VeloColors.foreground),
-                    modifier = Modifier.align(Alignment.Center),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(
-                    Modifier
-                        .align(Alignment.CenterEnd)
-                        .size(40.dp),
-                )
-            }
-            HorizontalDivider(color = VeloColors.divider, thickness = 1.dp)
-        }
-
         Box(Modifier.fillMaxWidth().height(320.dp)) {
             MapPane(
                 provider = provider,
@@ -149,6 +100,27 @@ fun DetailScreen(
                         ),
                     ),
             )
+            Surface(
+                shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
+                color = VeloColors.background,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(24.dp)
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(VeloDimens.radiusSm.dp))
+                    .tapFeedbackClickable { onBack() },
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = "Back",
+                        tint = VeloColors.gray400,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(180f),
+                    )
+                }
+            }
         }
 
         Column(

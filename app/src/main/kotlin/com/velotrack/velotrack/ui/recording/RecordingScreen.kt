@@ -316,7 +316,7 @@ private fun MainGaugeCard(
                     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
                         Text(
                             text = formatSpeedKmh(if (state.isPaused) 0.0 else state.currentSpeedMps),
-                            style = tabularTextStyle(36.sp, FontWeight.Bold, VeloColors.foreground),
+                            style = tabularTextStyle(42.sp, FontWeight.Bold, VeloColors.foreground),
                             maxLines = 1,
                             softWrap = false,
                         )

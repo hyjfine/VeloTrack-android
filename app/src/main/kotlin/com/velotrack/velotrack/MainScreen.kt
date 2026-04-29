@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.velotrack.velotrack.ui.VeloColors
+import com.velotrack.velotrack.ui.VeloSystemBars
 
 @Composable
 fun VeloMainScreen(
@@ -43,6 +44,8 @@ fun VeloMainScreen(
     onAnalyze: () -> Unit,
     onBackDetail: () -> Unit,
 ) {
+    VeloSystemBars()
+
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     BackHandler(enabled = state.view == AppView.DETAIL) {
         onBackDetail()

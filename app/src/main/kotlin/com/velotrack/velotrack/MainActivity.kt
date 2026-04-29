@@ -2,18 +2,20 @@ package com.velotrack.velotrack
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import com.velotrack.velotrack.ui.VeloTheme
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.app.ActivityCompat
-import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velotrack.velotrack.db.AppDatabase
 import java.util.Locale
@@ -52,7 +54,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                lightScrim = Color.TRANSPARENT,
+                darkScrim = Color.TRANSPARENT,
+            ),
+            navigationBarStyle = SystemBarStyle.auto(
+                lightScrim = Color.TRANSPARENT,
+                darkScrim = Color.TRANSPARENT,
+            ),
+        )
+        disableSystemBarContrastOverlays()
         enableAdaptiveHighRefreshRate()
         logMapStartupDiagnostics()
         restoreCachedLocation()
@@ -108,6 +120,12 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         startCountdownAfterPermission = false
+    }
+
+    @Suppress("DEPRECATION")
+    private fun disableSystemBarContrastOverlays() {
+        window.isStatusBarContrastEnforced = false
+        window.isNavigationBarContrastEnforced = false
     }
 
     private fun dispatchLocation(point: GpsPoint) {
