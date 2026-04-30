@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             VeloTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
-                LaunchedEffect(state.isRecording, state.isPaused) {
+                LaunchedEffect(state.isRecording, state.isPaused, state.startCountdownSeconds) {
                     syncLocationSubscription()
                 }
                 LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
@@ -203,14 +203,16 @@ class MainActivity : ComponentActivity() {
 
     private fun syncLocationSubscription() {
         val state = viewModel.uiState.value
-        val shouldTrack = state.isRecording && !state.isPaused
-        if (shouldTrack && !hasLocationPermission()) {
+        val shouldPrewarm = state.startCountdownSeconds != null
+        val shouldRecordTrack = state.isRecording && !state.isPaused
+        val shouldUseLocation = shouldPrewarm || shouldRecordTrack
+        if (shouldUseLocation && !hasLocationPermission()) {
             requestLocationPermissions()
             return
         }
-        if (shouldTrack && hasLocationPermission()) {
+        if (shouldUseLocation && hasLocationPermission()) {
             locationTracker.start(precise = hasFineLocationPermission())
-        } else if (!shouldTrack) {
+        } else if (!shouldUseLocation) {
             locationTracker.stop()
         }
     }

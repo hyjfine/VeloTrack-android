@@ -236,6 +236,19 @@ class TrackViewModel(
                     lastSpeedSource = speedSourceLabel,
                 )
             }
+            if (point.timestamp < recordingStartAt) {
+                return@update s.copy(
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = "before recording start",
+                    mapCenterLat = point.lat,
+                    mapCenterLng = point.lng,
+                    currentAltitude = point.altitude,
+                    lastRawSpeedMps = rawSpeed,
+                    lastSpeedSource = speedSourceLabel,
+                )
+            }
             val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
             val points = if (canUseForTrack) s.livePoints + point else s.livePoints
             // 速度仅信任 GNSS 来源；其它来源不更新瞬时速度，避免 0 值闪烁与单位踩坑。
