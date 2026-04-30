@@ -1,9 +1,23 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.isFile) {
+        file.inputStream().use(::load)
+    }
+}
+
+fun secretProperty(name: String): String =
+    (project.findProperty(name) as String?)?.trim()
+        ?: localProperties.getProperty(name)?.trim()
+        ?: ""
 
 android {
     namespace = "com.velotrack.velotrack"
@@ -26,10 +40,10 @@ android {
         versionName = "1.0.0"
 
 
-        val geminiKey = (project.findProperty("GEMINI_API_KEY") as String?) ?: ""
-        val googleMapsKey = (project.findProperty("GOOGLE_MAPS_API_KEY") as String?) ?: ""
-        val amapKey = (project.findProperty("AMAP_API_KEY") as String?) ?: ""
-        val mapProviderOverride = (project.findProperty("MAP_PROVIDER") as String?) ?: ""
+        val geminiKey = secretProperty("GEMINI_API_KEY")
+        val googleMapsKey = secretProperty("GOOGLE_MAPS_API_KEY")
+        val amapKey = secretProperty("AMAP_API_KEY")
+        val mapProviderOverride = secretProperty("MAP_PROVIDER")
         buildConfigField("String", "GEMINI_API_KEY", "\"${geminiKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${googleMapsKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "AMAP_API_KEY", "\"${amapKey.replace("\"", "\\\"")}\"")

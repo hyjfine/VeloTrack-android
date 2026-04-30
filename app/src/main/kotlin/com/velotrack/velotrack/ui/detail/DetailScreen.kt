@@ -49,8 +49,11 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
@@ -329,17 +332,123 @@ private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
                         Text(state.errorMessage, color = VeloColors.danger, fontSize = 16.sp)
                     }
                     else -> {
-                        Text(
-                            "\"${state.aiAnalysis}\"",
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 20.sp,
-                            fontStyle = FontStyle.Italic,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 28.sp,
-                        )
+                        AiAnalysisMarkdown(state.aiAnalysis.orEmpty())
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun AiAnalysisMarkdown(markdown: String) {
+    val blocks = remember(markdown) { parseAiMarkdown(markdown) }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is AiMarkdownBlock.Heading -> Text(
+                    text = stripInlineMarkdown(block.text),
+                    color = VeloColors.accent,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    lineHeight = 20.sp,
+                )
+                is AiMarkdownBlock.ListItem -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = block.marker,
+                        color = VeloColors.accent,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black,
+                    )
+                    Text(
+                        text = inlineMarkdown(block.text),
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 22.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                is AiMarkdownBlock.Paragraph -> Text(
+                    text = inlineMarkdown(block.text),
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 22.sp,
+                )
+            }
+        }
+    }
+}
+
+private sealed interface AiMarkdownBlock {
+    data class Heading(val text: String) : AiMarkdownBlock
+    data class ListItem(val marker: String, val text: String) : AiMarkdownBlock
+    data class Paragraph(val text: String) : AiMarkdownBlock
+}
+
+private fun parseAiMarkdown(markdown: String): List<AiMarkdownBlock> {
+    val blocks = mutableListOf<AiMarkdownBlock>()
+    val paragraph = StringBuilder()
+
+    fun flushParagraph() {
+        val text = paragraph.toString().trim()
+        if (text.isNotBlank()) blocks += AiMarkdownBlock.Paragraph(text)
+        paragraph.clear()
+    }
+
+    markdown.lineSequence().forEach { rawLine ->
+        val line = rawLine.trim()
+        when {
+            line.isBlank() -> flushParagraph()
+            line.startsWith("#") -> {
+                flushParagraph()
+                blocks += AiMarkdownBlock.Heading(line.trimStart('#').trim())
+            }
+            line.startsWith("- ") || line.startsWith("* ") -> {
+                flushParagraph()
+                blocks += AiMarkdownBlock.ListItem("•", line.drop(2).trim())
+            }
+            line.matches(Regex("^\\d+[.)]\\s+.*")) -> {
+                flushParagraph()
+                val markerEnd = line.indexOfFirst { it == '.' || it == ')' }
+                blocks += AiMarkdownBlock.ListItem(
+                    marker = line.substring(0, markerEnd + 1),
+                    text = line.substring(markerEnd + 1).trim(),
+                )
+            }
+            else -> {
+                if (paragraph.isNotEmpty()) paragraph.append(' ')
+                paragraph.append(line)
+            }
+        }
+    }
+    flushParagraph()
+    return blocks.ifEmpty { listOf(AiMarkdownBlock.Paragraph(markdown.trim())) }
+}
+
+private fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
+    var index = 0
+    while (index < text.length) {
+        val start = text.indexOf("**", index)
+        if (start < 0) {
+            append(stripInlineMarkdown(text.substring(index)))
+            break
+        }
+        append(stripInlineMarkdown(text.substring(index, start)))
+        val end = text.indexOf("**", start + 2)
+        if (end < 0) {
+            append(stripInlineMarkdown(text.substring(start)))
+            break
+        }
+        withStyle(SpanStyle(fontWeight = FontWeight.Black, color = Color.White)) {
+            append(stripInlineMarkdown(text.substring(start + 2, end)))
+        }
+        index = end + 2
+    }
+}
+
+private fun stripInlineMarkdown(text: String): String = text
+    .replace("**", "")
+    .replace("__", "")
+    .replace("`", "")

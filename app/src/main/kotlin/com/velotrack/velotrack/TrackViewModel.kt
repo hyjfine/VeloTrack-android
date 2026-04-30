@@ -1,5 +1,6 @@
 package com.velotrack.velotrack
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.max
 
 data class TrackUiState(
@@ -347,13 +349,34 @@ class TrackViewModel(
 
     fun runAnalysis() {
         val ride = _uiState.value.selectedRide ?: return
+        val requestId = UUID.randomUUID().toString().take(8)
+        val prompt = buildPrompt(ride)
+        Log.d(
+            AI_LOG_TAG,
+            "analysis start requestId=$requestId rideId=${ride.id} points=${ride.points.size} " +
+                "distanceBucket=${distanceBucket(ride.totalDistance)} durationBucket=${durationBucket(ride)} " +
+                "hasEnd=${ride.endTime != null} apiKeyConfigured=${BuildConfig.GEMINI_API_KEY.isNotBlank()} " +
+                "promptChars=${prompt.length}",
+        )
         _uiState.update { it.copy(isAnalysing = true, aiAnalysis = null, errorMessage = null) }
         viewModelScope.launch(Dispatchers.IO) {
+            val startedAt = System.currentTimeMillis()
             runCatching {
-                GeminiClient.generateContent(BuildConfig.GEMINI_API_KEY, buildPrompt(ride))
+                GeminiClient.generateContent(BuildConfig.GEMINI_API_KEY, prompt, requestId)
             }.onSuccess { text ->
+                Log.d(
+                    AI_LOG_TAG,
+                    "analysis success requestId=$requestId elapsedMs=${System.currentTimeMillis() - startedAt} responseChars=${text.length}",
+                )
                 _uiState.update { it.copy(isAnalysing = false, aiAnalysis = text) }
             }.onFailure { error ->
+                Log.w(
+                    AI_LOG_TAG,
+                    "analysis failed requestId=$requestId elapsedMs=${System.currentTimeMillis() - startedAt} " +
+                        "reason=${(error as? GeminiClient.GeminiProxyException)?.reason ?: "unknown"} " +
+                        "type=${error::class.java.simpleName}",
+                    error,
+                )
                 _uiState.update {
                     it.copy(
                         isAnalysing = false,
@@ -361,6 +384,24 @@ class TrackViewModel(
                     )
                 }
             }
+        }
+    }
+
+    private fun distanceBucket(meters: Double): String = when {
+        meters < 1_000.0 -> "<1km"
+        meters < 5_000.0 -> "1-5km"
+        meters < 20_000.0 -> "5-20km"
+        else -> ">=20km"
+    }
+
+    private fun durationBucket(ride: Ride): String {
+        val durationMs = ((ride.endTime ?: ride.startTime) - ride.startTime).coerceAtLeast(0L)
+        val minutes = durationMs / 60_000L
+        return when {
+            minutes < 5 -> "<5m"
+            minutes < 30 -> "5-30m"
+            minutes < 120 -> "30-120m"
+            else -> ">=120m"
         }
     }
 
@@ -393,10 +434,14 @@ class TrackViewModel(
         Avg Speed: ${formatSpeedKmh(ride.avgSpeed)} km/h
         Max Speed: ${formatSpeedKmh(ride.maxSpeed)} km/h
         Data samples: ${ride.points.size}
-        Please give a concise analysis in Chinese (suitable for mobile display), including:
-        1. Performance summary
-        2. One area for improvement
-        3. A motivational remark.
+        Please reply in concise Chinese using simple Markdown only:
+        ## 表现总结
+        - one short bullet about overall performance
+        ## 改进建议
+        - one practical coaching tip
+        ## 鼓励
+        - one motivational sentence
+        Do not use tables, code blocks, links, or long paragraphs.
     """.trimIndent()
 
     companion object {
@@ -409,6 +454,7 @@ class TrackViewModel(
         private const val MOVING_THRESHOLD_MPS = 0.5
         private const val MAX_SPEED_WINDOW = 5
         private const val MAX_SEGMENT_GAP_MS = 10_000L
+        private const val AI_LOG_TAG = "VeloAI"
 
         fun factory(repo: RideRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
