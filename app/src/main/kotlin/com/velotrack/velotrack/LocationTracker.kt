@@ -290,17 +290,20 @@ class LocationTracker(
     private fun Location.accuracyText(): String =
         if (hasAccuracy()) "${accuracy.toInt()}m" else "unknown"
 
-    private fun Location.toGpsPoint(source: GpsSource, isGpsFix: Boolean): GpsPoint =
-        GpsPoint(
+    private fun Location.toGpsPoint(source: GpsSource, isGpsFix: Boolean): GpsPoint {
+        val speedAvailable = hasSpeed()
+        return GpsPoint(
             lat = latitude,
             lng = longitude,
             timestamp = time.takeIf { it > 0 } ?: System.currentTimeMillis(),
-            speedMps = if (hasSpeed()) speed.toDouble() else 0.0,
+            speedMps = if (speedAvailable) speed.toDouble() else 0.0,
+            hasSpeed = speedAvailable,
             altitude = if (hasAltitude()) altitude else null,
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
             source = source,
             isGpsFix = isGpsFix,
         )
+    }
 
     private fun AMapLocation.toGpsPoint(): GpsPoint {
         val normalized = if (coordType == AMapLocation.COORD_TYPE_GCJ02) {
@@ -320,12 +323,14 @@ class LocationTracker(
             else -> GpsSource.AMAP_OTHER
         }
         val isGpsFix = locationType == AMapLocation.LOCATION_TYPE_GPS
+        val speedAvailable = isGpsFix && hasSpeed()
         return GpsPoint(
             lat = normalized.lat,
             lng = normalized.lng,
             timestamp = time.takeIf { it > 0 } ?: System.currentTimeMillis(),
             // 非 GPS 来源的 speed 在 AMap SDK 中常常无意义；仅 GPS 时透传。
-            speedMps = if (isGpsFix && hasSpeed()) speed.toDouble() else 0.0,
+            speedMps = if (speedAvailable) speed.toDouble() else 0.0,
+            hasSpeed = speedAvailable,
             altitude = if (hasAltitude()) altitude else null,
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
             source = source,

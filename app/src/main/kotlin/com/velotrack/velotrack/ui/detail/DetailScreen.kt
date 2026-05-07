@@ -146,7 +146,7 @@ private fun StatsGrid(ride: Ride) {
     val cells = listOf(
         "Total Distance" to formatDistanceMeters(ride.totalDistance),
         "Average Speed" to "${formatSpeedKmh(ride.avgSpeed)} kph",
-        "Moving Time" to formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
+        "Duration" to formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
         "Max Speed" to "${formatSpeedKmh(ride.maxSpeed)} kph",
     )
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {

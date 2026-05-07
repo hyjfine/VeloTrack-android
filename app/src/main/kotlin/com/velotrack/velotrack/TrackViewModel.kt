@@ -157,11 +157,14 @@ class TrackViewModel(
         elapsedTicker?.cancel()
 
         val points = s.livePoints
-        val totalDistance = points.zipWithNext()
-            .sumOf { (a, b) -> GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng) }
-        // 平均速度使用“运动距离 / 运动时长”，更贴近主流运动 App 口径。
-        val movingTimeSec = movingDurationSeconds(points)
-        val avgSpeed = if (movingTimeSec > 0.0) totalDistance / movingTimeSec else 0.0
+        val rideStats = rideStats(points)
+        val totalDistance = rideStats.totalDistanceMeters
+        // 平均速度使用“有效运动段距离 / 有效运动段时间”，避免停车抖动、缓存点和非 GPS 点把均速拉低。
+        val avgSpeed = if (rideStats.movingTimeSeconds > 0.0) {
+            rideStats.movingDistanceMeters / rideStats.movingTimeSeconds
+        } else {
+            0.0
+        }
         // 最大速度使用滑动窗口均值的最大值，剔除瞬时尖峰。
         val maxSpeed = slidingWindowMaxSpeed(points, MAX_SPEED_WINDOW)
         val start = if (points.isEmpty()) System.currentTimeMillis() - accumulatedElapsed else points.first().timestamp
@@ -210,7 +213,9 @@ class TrackViewModel(
 
     fun onLocation(point: GpsPoint) {
         val rawSpeed = point.speedMps
-        val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
+        val speedSourceLabel = point.source.label +
+            (if (point.isGpsFix) "*" else "") +
+            (if (point.hasSpeed) "/v" else "/no-v")
         if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) {
             _uiState.update {
                 it.copy(
@@ -251,11 +256,23 @@ class TrackViewModel(
                     lastSpeedSource = speedSourceLabel,
                 )
             }
-            val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
+            val hasTrackQuality = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
+            val canUseForTrack = hasTrackQuality && point.isGpsFix
+            val previousTrackPoint = s.livePoints.lastOrNull()
             val points = if (canUseForTrack) s.livePoints + point else s.livePoints
-            // 速度仅信任 GNSS 来源；其它来源不更新瞬时速度，避免 0 值闪烁与单位踩坑。
-            val nextSpeed = if (canUseForTrack && point.isGpsFix) {
-                val gated = if (rawSpeed < STANDSTILL_THRESHOLD_MPS) 0.0 else rawSpeed
+            // 速度仅信任 GNSS 来源；没有 provider speed 时用相邻 GPS 点段速度兜底，避免把缺失值 0m/s 当成真实速度拉低显示。
+            val segmentSpeed = if (canUseForTrack && point.isGpsFix && !point.hasSpeed) {
+                segmentSpeedMpsOrNull(previousTrackPoint, point)
+            } else {
+                null
+            }
+            val measuredSpeed = when {
+                canUseForTrack && point.isGpsFix && point.hasSpeed -> rawSpeed
+                canUseForTrack && point.isGpsFix -> segmentSpeed
+                else -> null
+            }
+            val nextSpeed = if (measuredSpeed != null) {
+                val gated = if (measuredSpeed < STANDSTILL_THRESHOLD_MPS) 0.0 else measuredSpeed
                 if (s.currentSpeedMps <= 0.0) {
                     gated
                 } else {
@@ -265,8 +282,10 @@ class TrackViewModel(
                 s.currentSpeedMps
             }
             val dropReason = when {
-                !canUseForTrack -> "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
-                !point.isGpsFix -> "speed ignored: non-gps source"
+                !hasTrackQuality -> "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
+                !point.isGpsFix -> "map only: non-gps source"
+                !point.hasSpeed && segmentSpeed != null -> "speed fallback: segment"
+                !point.hasSpeed -> "speed unavailable"
                 else -> null
             }
             s.copy(
@@ -450,10 +469,11 @@ class TrackViewModel(
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
         private const val START_COUNTDOWN_SECONDS = 3
         private const val STANDSTILL_THRESHOLD_MPS = 0.5
-        private const val SPEED_EMA_ALPHA = 0.4
-        private const val MOVING_THRESHOLD_MPS = 0.5
+        private const val SPEED_EMA_ALPHA = 0.7
+        private const val MOVING_THRESHOLD_MPS = 1.0
         private const val MAX_SPEED_WINDOW = 5
         private const val MAX_SEGMENT_GAP_MS = 10_000L
+        private const val MAX_REASONABLE_SEGMENT_SPEED_MPS = 80.0
         private const val AI_LOG_TAG = "VeloAI"
 
         fun factory(repo: RideRepository): ViewModelProvider.Factory =
@@ -477,19 +497,43 @@ class TrackViewModel(
             return out
         }
 
-        private fun movingDurationSeconds(points: List<GpsPoint>): Double {
-            if (points.size < 2) return 0.0
-            var totalMs = 0L
+        private fun segmentSpeedMpsOrNull(a: GpsPoint?, b: GpsPoint): Double? {
+            if (a == null) return null
+            val dtMs = b.timestamp - a.timestamp
+            if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) return null
+            return GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng) / (dtMs / 1000.0)
+        }
+
+        private data class RideStats(
+            val totalDistanceMeters: Double,
+            val movingDistanceMeters: Double,
+            val movingTimeSeconds: Double,
+        )
+
+        private fun rideStats(points: List<GpsPoint>): RideStats {
+            if (points.size < 2) return RideStats(0.0, 0.0, 0.0)
+            var totalDistance = 0.0
+            var movingDistance = 0.0
+            var movingMs = 0L
             for (i in 1 until points.size) {
                 val a = points[i - 1]
                 val b = points[i]
                 val dtMs = b.timestamp - a.timestamp
                 if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) continue
-                val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
-                val v = dist / (dtMs / 1000.0)
-                if (v > MOVING_THRESHOLD_MPS) totalMs += dtMs
+                val distance = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
+                val speed = distance / (dtMs / 1000.0)
+                if (speed > MAX_REASONABLE_SEGMENT_SPEED_MPS) continue
+                totalDistance += distance
+                if (speed > MOVING_THRESHOLD_MPS) {
+                    movingDistance += distance
+                    movingMs += dtMs
+                }
             }
-            return totalMs / 1000.0
+            return RideStats(
+                totalDistanceMeters = totalDistance,
+                movingDistanceMeters = movingDistance,
+                movingTimeSeconds = movingMs / 1000.0,
+            )
         }
 
         private fun slidingWindowMaxSpeed(points: List<GpsPoint>, window: Int): Double {

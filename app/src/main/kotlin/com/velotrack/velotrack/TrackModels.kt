@@ -12,6 +12,8 @@ data class GpsPoint(
     val lng: Double,
     val timestamp: Long,
     val speedMps: Double,
+    /** true 表示 [speedMps] 来自定位提供方；false 表示 provider 没有给有效速度值。 */
+    val hasSpeed: Boolean = false,
     val altitude: Double?,
     val accuracy: Double,
     /** 定位来源标签，仅供运行时判断与调试，不持久化。 */
