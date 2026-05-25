@@ -1,9 +1,12 @@
 package com.velotrack.velotrack
 
+import android.app.Application
 import android.util.Log
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.velotrack.velotrack.recording.RecordingSessionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,7 +18,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import kotlin.math.max
 
 data class TrackUiState(
     val view: AppView = AppView.RECORDING,
@@ -42,27 +44,44 @@ data class TrackUiState(
     val lastLocationCountedInTrack: Boolean = false,
     val lastLocationDropReason: String? = null,
     val locationDebugMessage: String? = null,
-    /** 最近一次原始速度（m/s），不经平滑/门限，仅用于 debug 校核。 */
     val lastRawSpeedMps: Double? = null,
-    /** 最近一次速度来源标签，用于 debug。 */
     val lastSpeedSource: String? = null,
-    /** 最近一次 GNSS 卫星快照。 */
     val gnss: GnssSatelliteSnapshot? = null,
 )
 
 class TrackViewModel(
+    application: Application,
     private val repo: RideRepository,
-) : ViewModel() {
+) : AndroidViewModel(application) {
+
+    private val recording = VeloApp.instance.recordingManager
+
     private val _uiState = MutableStateFlow(TrackUiState())
     val uiState: StateFlow<TrackUiState> = _uiState
 
-    private var elapsedTicker: Job? = null
     private var startCountdownJob: Job? = null
-    private var recordingStartAt = 0L
-    private var accumulatedElapsed = 0L
+    var hasFineLocation: Boolean = true
+        private set
 
     init {
         loadHistory()
+        viewModelScope.launch {
+            recording.state.collect { session -> mergeRecordingSession(session) }
+        }
+        viewModelScope.launch {
+            recording.stopEvents.collect { ride -> applyRideStopped(ride) }
+        }
+    }
+
+    fun setLocationPrecision(fine: Boolean) {
+        hasFineLocation = fine
+    }
+
+    /** 从后台回到前台时强制同步录制会话到 UI（地图轨迹等）。 */
+    fun syncRecordingUi() {
+        if (recording.state.value.isRecording) {
+            mergeRecordingSession(recording.state.value)
+        }
     }
 
     fun setView(view: AppView) {
@@ -110,39 +129,20 @@ class TrackViewModel(
 
     private fun startRecordingNow() {
         if (_uiState.value.isRecording) return
-        val now = System.currentTimeMillis()
-        recordingStartAt = now
-        accumulatedElapsed = 0L
         _uiState.update {
             it.copy(
-                isRecording = true,
-                isPaused = false,
                 startCountdownSeconds = null,
                 isHolding = false,
-                elapsedMs = 0L,
-                livePoints = emptyList(),
-                currentSpeedMps = 0.0,
-                currentAltitude = null,
-                signalLost = false,
                 aiAnalysis = null,
                 errorMessage = null,
             )
         }
-        startTicker()
+        recording.startRecording(hasFineLocation)
     }
 
     fun togglePause() {
-        val s = _uiState.value
-        if (!s.isRecording || s.startCountdownSeconds != null) return
-        if (!s.isPaused) {
-            accumulatedElapsed += (System.currentTimeMillis() - recordingStartAt)
-            elapsedTicker?.cancel()
-            _uiState.update { it.copy(isPaused = true, currentSpeedMps = 0.0) }
-        } else {
-            recordingStartAt = System.currentTimeMillis()
-            _uiState.update { it.copy(isPaused = false) }
-            startTicker()
-        }
+        if (!_uiState.value.isRecording || _uiState.value.startCountdownSeconds != null) return
+        recording.togglePause(hasFineLocation)
     }
 
     fun stopRecording() {
@@ -151,33 +151,11 @@ class TrackViewModel(
             cancelStartCountdown()
             return
         }
-        if (!s.isPaused) {
-            accumulatedElapsed += (System.currentTimeMillis() - recordingStartAt)
-        }
-        elapsedTicker?.cancel()
+        recording.stopRecording { }
+    }
 
-        val points = s.livePoints
-        val totalDistance = points.zipWithNext()
-            .sumOf { (a, b) -> GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng) }
-        // 平均速度使用“运动距离 / 运动时长”，更贴近主流运动 App 口径。
-        val movingTimeSec = movingDurationSeconds(points)
-        val avgSpeed = if (movingTimeSec > 0.0) totalDistance / movingTimeSec else 0.0
-        // 最大速度使用滑动窗口均值的最大值，剔除瞬时尖峰。
-        val maxSpeed = slidingWindowMaxSpeed(points, MAX_SPEED_WINDOW)
-        val start = if (points.isEmpty()) System.currentTimeMillis() - accumulatedElapsed else points.first().timestamp
-        val end = if (points.isEmpty()) System.currentTimeMillis() else points.last().timestamp
-        val ride = Ride(
-            id = System.currentTimeMillis().toString(),
-            title = "Ride on ${SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())}",
-            startTime = start,
-            endTime = end,
-            points = points,
-            totalDistance = totalDistance,
-            avgSpeed = avgSpeed,
-            maxSpeed = maxSpeed,
-        )
+    private fun applyRideStopped(ride: Ride) {
         viewModelScope.launch(Dispatchers.IO) {
-            repo.saveRide(ride)
             val refreshed = repo.listRides()
             _uiState.update {
                 it.copy(
@@ -208,85 +186,14 @@ class TrackViewModel(
         _uiState.update { it.copy(isHolding = false) }
     }
 
+    /** 倒计时预热阶段：由 Activity 的 LocationTracker 回调。 */
     fun onLocation(point: GpsPoint) {
-        val rawSpeed = point.speedMps
-        val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
-        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) {
-            _uiState.update {
-                it.copy(
-                    lastLocationAtMs = point.timestamp,
-                    lastLocationAccuracyM = point.accuracy,
-                    lastLocationCountedInTrack = false,
-                    lastLocationDropReason = "accuracy>${MAP_LOCATION_MAX_ACCURACY_M.toInt()}m",
-                    lastRawSpeedMps = rawSpeed,
-                    lastSpeedSource = speedSourceLabel,
-                )
-            }
-            return
-        }
-        _uiState.update { s ->
-            if (!s.isRecording || s.isPaused) {
-                return@update s.copy(
-                    lastLocationAtMs = point.timestamp,
-                    lastLocationAccuracyM = point.accuracy,
-                    lastLocationCountedInTrack = false,
-                    lastLocationDropReason = if (!s.isRecording) "not recording" else "paused",
-                    mapCenterLat = point.lat,
-                    mapCenterLng = point.lng,
-                    currentAltitude = point.altitude,
-                    lastRawSpeedMps = rawSpeed,
-                    lastSpeedSource = speedSourceLabel,
-                )
-            }
-            if (point.timestamp < recordingStartAt) {
-                return@update s.copy(
-                    lastLocationAtMs = point.timestamp,
-                    lastLocationAccuracyM = point.accuracy,
-                    lastLocationCountedInTrack = false,
-                    lastLocationDropReason = "before recording start",
-                    mapCenterLat = point.lat,
-                    mapCenterLng = point.lng,
-                    currentAltitude = point.altitude,
-                    lastRawSpeedMps = rawSpeed,
-                    lastSpeedSource = speedSourceLabel,
-                )
-            }
-            val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
-            val points = if (canUseForTrack) s.livePoints + point else s.livePoints
-            // 速度仅信任 GNSS 来源；其它来源不更新瞬时速度，避免 0 值闪烁与单位踩坑。
-            val nextSpeed = if (canUseForTrack && point.isGpsFix) {
-                val gated = if (rawSpeed < STANDSTILL_THRESHOLD_MPS) 0.0 else rawSpeed
-                if (s.currentSpeedMps <= 0.0) {
-                    gated
-                } else {
-                    SPEED_EMA_ALPHA * gated + (1 - SPEED_EMA_ALPHA) * s.currentSpeedMps
-                }
-            } else {
-                s.currentSpeedMps
-            }
-            val dropReason = when {
-                !canUseForTrack -> "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
-                !point.isGpsFix -> "speed ignored: non-gps source"
-                else -> null
-            }
-            s.copy(
-                livePoints = points,
-                mapCenterLat = point.lat,
-                mapCenterLng = point.lng,
-                currentSpeedMps = max(0.0, nextSpeed),
-                currentAltitude = point.altitude,
-                signalLost = point.accuracy > GOOD_SIGNAL_MAX_ACCURACY_M,
-                lastLocationAtMs = point.timestamp,
-                lastLocationAccuracyM = point.accuracy,
-                lastLocationCountedInTrack = canUseForTrack,
-                lastLocationDropReason = dropReason,
-                lastRawSpeedMps = rawSpeed,
-                lastSpeedSource = speedSourceLabel,
-            )
-        }
+        if (_uiState.value.isRecording) return
+        onLocationForMapPreview(point)
     }
 
     fun onGnssStatus(snapshot: GnssSatelliteSnapshot) {
+        if (_uiState.value.isRecording) return
         _uiState.update { it.copy(gnss = snapshot) }
     }
 
@@ -310,6 +217,7 @@ class TrackViewModel(
     }
 
     fun onLocationDebug(message: String) {
+        if (_uiState.value.isRecording) return
         _uiState.update { it.copy(locationDebugMessage = message) }
     }
 
@@ -387,6 +295,49 @@ class TrackViewModel(
         }
     }
 
+    private fun mergeRecordingSession(session: RecordingSessionState) {
+        _uiState.update { ui ->
+            ui.copy(
+                isRecording = session.isRecording,
+                isPaused = session.isPaused,
+                elapsedMs = session.elapsedMs,
+                livePoints = session.livePoints,
+                currentSpeedMps = session.currentSpeedMps,
+                mapCenterLat = session.mapCenterLat,
+                mapCenterLng = session.mapCenterLng,
+                currentAltitude = session.currentAltitude,
+                signalLost = session.signalLost,
+                lastLocationAtMs = session.lastLocationAtMs,
+                lastLocationAccuracyM = session.lastLocationAccuracyM,
+                lastLocationCountedInTrack = session.lastLocationCountedInTrack,
+                lastLocationDropReason = session.lastLocationDropReason,
+                locationDebugMessage = session.locationDebugMessage,
+                lastRawSpeedMps = session.lastRawSpeedMps,
+                lastSpeedSource = session.lastSpeedSource,
+                gnss = session.gnss,
+            )
+        }
+    }
+
+    private fun onLocationForMapPreview(point: GpsPoint) {
+        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) return
+        val rawSpeed = point.speedMps
+        val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
+        _uiState.update {
+            it.copy(
+                mapCenterLat = point.lat,
+                mapCenterLng = point.lng,
+                currentAltitude = point.altitude,
+                lastLocationAtMs = point.timestamp,
+                lastLocationAccuracyM = point.accuracy,
+                lastLocationCountedInTrack = false,
+                lastLocationDropReason = "prewarm",
+                lastRawSpeedMps = rawSpeed,
+                lastSpeedSource = speedSourceLabel,
+            )
+        }
+    }
+
     private fun distanceBucket(meters: Double): String = when {
         meters < 1_000.0 -> "<1km"
         meters < 5_000.0 -> "1-5km"
@@ -416,17 +367,6 @@ class TrackViewModel(
             -> "分析失败，请稍后重试"
         }
 
-    private fun startTicker() {
-        elapsedTicker?.cancel()
-        elapsedTicker = viewModelScope.launch {
-            while (true) {
-                val elapsed = accumulatedElapsed + (System.currentTimeMillis() - recordingStartAt)
-                _uiState.update { it.copy(elapsedMs = elapsed) }
-                delay(1000)
-            }
-        }
-    }
-
     private fun buildPrompt(ride: Ride): String = """
         Analyze this cycling ride and provide professional coaching advice.
         Distance: ${formatDistanceMeters(ride.totalDistance)}
@@ -445,69 +385,16 @@ class TrackViewModel(
     """.trimIndent()
 
     companion object {
-        private const val TRACK_POINT_MAX_ACCURACY_M = 40.0
-        private const val GOOD_SIGNAL_MAX_ACCURACY_M = 25.0
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
         private const val START_COUNTDOWN_SECONDS = 3
-        private const val STANDSTILL_THRESHOLD_MPS = 0.5
-        private const val SPEED_EMA_ALPHA = 0.4
-        private const val MOVING_THRESHOLD_MPS = 0.5
-        private const val MAX_SPEED_WINDOW = 5
-        private const val MAX_SEGMENT_GAP_MS = 10_000L
         private const val AI_LOG_TAG = "VeloAI"
 
-        fun factory(repo: RideRepository): ViewModelProvider.Factory =
+        fun factory(application: Application, repo: RideRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T = TrackViewModel(repo) as T
+                override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                    TrackViewModel(application, repo) as T
             }
-
-        /** 段速度（m/s）= 相邻两点 haversine 距离 / 时间差，dt 异常段忽略。 */
-        private fun segmentSpeedsMps(points: List<GpsPoint>): List<Double> {
-            if (points.size < 2) return emptyList()
-            val out = ArrayList<Double>(points.size - 1)
-            for (i in 1 until points.size) {
-                val a = points[i - 1]
-                val b = points[i]
-                val dtMs = b.timestamp - a.timestamp
-                if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) continue
-                val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
-                out += dist / (dtMs / 1000.0)
-            }
-            return out
-        }
-
-        private fun movingDurationSeconds(points: List<GpsPoint>): Double {
-            if (points.size < 2) return 0.0
-            var totalMs = 0L
-            for (i in 1 until points.size) {
-                val a = points[i - 1]
-                val b = points[i]
-                val dtMs = b.timestamp - a.timestamp
-                if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) continue
-                val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
-                val v = dist / (dtMs / 1000.0)
-                if (v > MOVING_THRESHOLD_MPS) totalMs += dtMs
-            }
-            return totalMs / 1000.0
-        }
-
-        private fun slidingWindowMaxSpeed(points: List<GpsPoint>, window: Int): Double {
-            val speeds = segmentSpeedsMps(points)
-            if (speeds.isEmpty()) return 0.0
-            if (speeds.size < window) {
-                return speeds.max()
-            }
-            var sum = 0.0
-            for (i in 0 until window) sum += speeds[i]
-            var maxAvg = sum / window
-            for (i in window until speeds.size) {
-                sum += speeds[i] - speeds[i - window]
-                val avg = sum / window
-                if (avg > maxAvg) maxAvg = avg
-            }
-            return maxAvg
-        }
     }
 }
 

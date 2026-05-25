@@ -1,0 +1,33 @@
+---
+description: 地图双端、定位与坐标系
+globs: app/**/{MapPane,MapProviderSelector,LocationTracker,CoordinateTransform,VeloApplication,MainActivity}.kt
+alwaysApply: false
+---
+
+# 地图与定位
+
+## 区域策略
+
+- `MapProviderSelector`：`Locale.country == "CN"` → `AMAP`，否则 `GOOGLE_MAPS`
+- 覆盖：`gradle.properties` 中 `MAP_PROVIDER=AMAP|GOOGLE|GAODE|CN|GLOBAL`
+
+## 坐标系
+
+- **存储/统计/导出**：WGS-84（`GpsPoint.lat/lng`）
+- **高德底图渲染**：`CoordinateTransform` 转 GCJ-02，仅 `MapPane` 内使用
+
+## 定位
+
+- 国内：高德定位 SDK（避免强依赖 GMS）
+- 海外：GMS `FusedLocationProvider`
+- 精度 > 40m 丢点等业务规则在 `TrackViewModel.onLocation` / `LocationTracker`
+
+## 高德注意
+
+- `VeloApplication` 必须先 `MapsInitializer.updatePrivacyShow` + `updatePrivacyAgree`
+- debug Key 绑定包名 `com.velotrack.velotrack.debug` + debug keystore SHA1
+- 权限：`ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`
+
+## 调试
+
+- 启动日志 tag `VeloTrack`：`logMapStartupDiagnostics()` 输出 provider 与 key 是否配置

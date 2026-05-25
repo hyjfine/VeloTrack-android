@@ -32,6 +32,54 @@ class RideRepository(
         dao.deleteByIdBlocking(id)
     }
 
+    fun beginDraftRide(rideId: String, title: String, startTime: Long) {
+        dao.insertDraftRideBlocking(
+            RideEntity(
+                id = rideId,
+                title = title,
+                startTime = startTime,
+                endTime = null,
+                totalDistance = 0.0,
+                avgSpeed = 0.0,
+                maxSpeed = 0.0,
+            ),
+        )
+    }
+
+    fun appendTrackPoints(rideId: String, startIndex: Int, points: List<GpsPoint>) {
+        if (points.isEmpty()) return
+        dao.appendPointsBlocking(
+            rideId,
+            points.mapIndexed { offset, point ->
+                pointToEntity(rideId, startIndex + offset, point)
+            },
+        )
+    }
+
+    fun finalizeRide(ride: Ride) {
+        dao.finalizeRideBlocking(
+            RideEntity(
+                id = ride.id,
+                title = ride.title,
+                startTime = ride.startTime,
+                endTime = ride.endTime,
+                totalDistance = ride.totalDistance,
+                avgSpeed = ride.avgSpeed,
+                maxSpeed = ride.maxSpeed,
+            ),
+            ride.points.mapIndexed { index, point -> pointToEntity(ride.id, index, point) },
+        )
+    }
+
+    fun deleteDraftRide(id: String) {
+        dao.deleteByIdBlocking(id)
+    }
+
+    fun getActiveDraftRide(): Ride? =
+        dao.getActiveDraftRideBlocking()?.let { entity ->
+            entityToRide(entity)
+        }
+
     private fun entityToRide(entity: RideEntity): Ride {
         val points = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
         return Ride(

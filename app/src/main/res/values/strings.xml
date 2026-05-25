@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="recording_notification_channel_name">骑行录制</string>
+    <string name="recording_notification_channel_desc">后台持续记录 GPS 轨迹时显示</string>
+    <string name="recording_notification_title">VeloTrack 正在记录</string>
+    <string name="recording_notification_paused">已暂停</string>
+    <string name="recording_action_pause">暂停</string>
+    <string name="recording_action_resume">继续</string>
+    <string name="recording_action_stop">停止</string>
+</resources>

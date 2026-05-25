@@ -1,0 +1,20 @@
+---
+description: VeloTrack Android 项目概览与当前架构（纯原生）
+alwaysApply: true
+---
+
+# VeloTrack Android
+
+纯原生 Kotlin + Jetpack Compose 骑行记录 App；**已无 Flutter/Pigeon**。
+
+- 包名：`com.velotrack.velotrack`（debug 后缀 `.debug`）
+- 状态：`TrackViewModel` + `TrackUiState`；三视图 `RECORDING | HISTORY | DETAIL`
+- 定位/地图：录制中 `RecordingSessionManager`+`RecordingForegroundService`；地图 `MapPane`；CN→高德否则 Google
+- 存储：Room `RideRepository`；GPS 存 WGS-84，仅地图渲染转 GCJ-02
+- 设计对齐：`docs/design-tokens.json`、`ui/VeloTheme.kt`；交互见 `docs/ui-spec.md`
+- 密钥：`local.properties` / `gradle.properties` → `BuildConfig`（勿提交）
+- 构建：`./gradlew :app:assembleDebug`
+
+`docs/architecture.md` 等仍写 Flutter 三端方案，**以本仓 Kotlin 代码与根目录 `AGENTS.md` 为准**。
+
+修改原则：最小 diff、速度用 m/s、后台录制走前台服务、不擅自恢复 Flutter。

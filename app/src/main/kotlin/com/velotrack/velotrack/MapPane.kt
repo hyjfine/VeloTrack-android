@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -217,6 +218,25 @@ private data class RouteHead(
     val bearingDeg: Float,
 )
 
+/** 地图从 onPause 恢复后需强制重绘轨迹（后台期间 Polyline 可能已更新但未上屏）。 */
+@Composable
+private fun rememberMapResumeEpoch(lifecycle: Lifecycle): Int {
+    var epoch by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                epoch++
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    return epoch
+}
+
+private fun routePointsTrackKey(points: List<GpsPoint>): Pair<Int, Long> =
+    points.size to (points.lastOrNull()?.timestamp ?: 0L)
+
 private fun hasDistinctRoutePoints(points: List<GpsPoint>): Boolean {
     val first = points.firstOrNull() ?: return false
     return points.any { it.lat != first.lat || it.lng != first.lng }
@@ -331,13 +351,16 @@ private fun GooglePane(
     fitRouteBounds: Boolean,
     onMapTouchingChanged: (Boolean) -> Unit,
 ) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val mapResumeEpoch = rememberMapResumeEpoch(lifecycle)
+    val pointsTrackKey = routePointsTrackKey(points)
     val cameraState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(
             GoogleLatLng(centerLat, centerLng),
             mapZoom,
         )
     }
-    val polyline = remember(points) { points.map { GoogleLatLng(it.lat, it.lng) } }
+    val polyline = remember(pointsTrackKey, mapResumeEpoch) { points.map { GoogleLatLng(it.lat, it.lng) } }
     val canFitRouteBounds = fitRouteBounds && hasDistinctRoutePoints(points)
     val polyColor = VeloColors.polyline.copy(alpha = 1f)
     val polyShadowColor = Color.Black.copy(alpha = 0.4f)
@@ -548,6 +571,8 @@ private fun AmapPane(
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val mapResumeEpoch = rememberMapResumeEpoch(lifecycle)
+    val pointsTrackKey = routePointsTrackKey(points)
     val canFitRouteBounds = fitRouteBounds && hasDistinctRoutePoints(points)
     var aMap by remember { mutableStateOf<AMap?>(null) }
     var shadowPolyline by remember { mutableStateOf<AmapPolyline?>(null) }
@@ -555,6 +580,7 @@ private fun AmapPane(
     var startMarker by remember { mutableStateOf<AmapMarker?>(null) }
     var finishMarker by remember { mutableStateOf<AmapMarker?>(null) }
     var routeHeadMarker by remember { mutableStateOf<AmapMarker?>(null) }
+    var lastPolylineResumeEpoch by remember { mutableIntStateOf(-1) }
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
     var hasUserAdjustedCamera by remember { mutableStateOf(false) }
@@ -656,6 +682,10 @@ private fun AmapPane(
             lifecycle.removeObserver(observer)
             removeEndpointMarkers()
             removeRouteHeadMarker()
+            shadowPolyline?.remove()
+            routePolyline?.remove()
+            shadowPolyline = null
+            routePolyline = null
             mapView.onPause()
             mapView.onDestroy()
         }
@@ -666,40 +696,46 @@ private fun AmapPane(
         val map = aMap ?: return@LaunchedEffect
         map.mapType = if (darkMode) AMap.MAP_TYPE_NIGHT else AMap.MAP_TYPE_NORMAL
     }
-    LaunchedEffect(points, aMap, polylineWidth, pxPerDp) {
+    LaunchedEffect(pointsTrackKey, aMap, polylineWidth, pxPerDp, mapResumeEpoch) {
         val map = aMap ?: return@LaunchedEffect
         if (points.size < 2) {
-            shadowPolyline?.remove()
-            routePolyline?.remove()
-            shadowPolyline = null
-            routePolyline = null
+            mapView.post {
+                shadowPolyline?.remove()
+                routePolyline?.remove()
+                shadowPolyline = null
+                routePolyline = null
+            }
             return@LaunchedEffect
         }
         val path = points.map { it.toAmapLatLng() }
         val shadowArgb = Color.Black.copy(alpha = 0.4f).toArgb()
         val argb = VeloColors.polyline.copy(alpha = 1f).toArgb()
-        if (shadowPolyline == null || routePolyline == null) {
-            shadowPolyline?.remove()
-            routePolyline?.remove()
-            shadowPolyline = map.addPolyline(
-                AmapPolylineOptions()
-                    .addAll(path)
-                    .color(shadowArgb)
+        val forceRecreate = mapResumeEpoch != lastPolylineResumeEpoch
+        mapView.post {
+            if (forceRecreate || shadowPolyline == null || routePolyline == null) {
+                shadowPolyline?.remove()
+                routePolyline?.remove()
+                shadowPolyline = map.addPolyline(
+                    AmapPolylineOptions()
+                        .addAll(path)
+                        .color(shadowArgb)
                         .width((polylineWidth + 5f) * pxPerDp)
                         .zIndex(ROUTE_SHADOW_Z_INDEX),
-            )
-            routePolyline = map.addPolyline(
-                AmapPolylineOptions()
-                    .addAll(path)
-                    .color(argb)
+                )
+                routePolyline = map.addPolyline(
+                    AmapPolylineOptions()
+                        .addAll(path)
+                        .color(argb)
                         .width(polylineWidth * pxPerDp)
                         .zIndex(ROUTE_LINE_Z_INDEX),
-            )
-        } else {
-            shadowPolyline?.points = path
-            routePolyline?.points = path
+                )
+                lastPolylineResumeEpoch = mapResumeEpoch
+            } else {
+                shadowPolyline?.points = path
+                routePolyline?.points = path
                 shadowPolyline?.zIndex = ROUTE_SHADOW_Z_INDEX
                 routePolyline?.zIndex = ROUTE_LINE_Z_INDEX
+            }
         }
     }
     LaunchedEffect(points, aMap, fitRouteBounds, markerDensity) {
@@ -755,7 +791,7 @@ private fun AmapPane(
             currentFinishMarker.setZIndex(ROUTE_ENDPOINT_Z_INDEX)
         }
     }
-    LaunchedEffect(points, aMap, showRouteHeadArrow, routeHeadHeadingDeg, routeHeadArrowIcon) {
+    LaunchedEffect(pointsTrackKey, aMap, showRouteHeadArrow, routeHeadHeadingDeg, routeHeadArrowIcon, mapResumeEpoch) {
         val map = aMap ?: return@LaunchedEffect
         val head = if (showRouteHeadArrow) routeHeadFromPoints(points, routeHeadHeadingDeg) else null
         if (head == null) {

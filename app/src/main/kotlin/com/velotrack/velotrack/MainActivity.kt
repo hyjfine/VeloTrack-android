@@ -3,6 +3,7 @@ package com.velotrack.velotrack
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
@@ -16,50 +17,67 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velotrack.velotrack.db.AppDatabase
+import com.velotrack.velotrack.recording.RecordingNotificationHelper
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: TrackViewModel by viewModels {
-        TrackViewModel.factory(RideRepository(AppDatabase.get(this).rideDao()))
+        TrackViewModel.factory(
+            application,
+            RideRepository(AppDatabase.get(this).rideDao()),
+        )
     }
 
-    /** 与地图一致：国内不用 GMS 定位，避免「需要启动 Google Play 服务」弹窗。 */
     private val mapProvider: MapProvider by lazy { MapProviderSelector.select() }
 
     private val lastLocationStore: LastLocationStore by lazy {
         LastLocationStore(this)
     }
 
-    private val locationTracker: LocationTracker by lazy {
+    /** 仅用于开始倒计时前的定位预热；正式录制由 [RecordingSessionManager] 负责。 */
+    private val prewarmLocationTracker: LocationTracker by lazy {
         LocationTracker(
             this,
             mapProvider,
-            ::dispatchLocation,
+            ::dispatchPrewarmLocation,
             viewModel::onLocationDebug,
             viewModel::onGnssStatus,
         )
     }
 
     private var startCountdownAfterPermission = false
+    private var pendingNotificationAfterPermission = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            val shouldBeginStartCountdown = startCountdownAfterPermission &&
-                permissions.values.any { it } &&
+            syncLocationPrecision()
+            val hasLocation = permissions.values.any { it }
+            if (startCountdownAfterPermission && hasLocation &&
                 viewModel.uiState.value.view == AppView.RECORDING &&
                 !viewModel.uiState.value.isRecording
-            startCountdownAfterPermission = false
-            if (shouldBeginStartCountdown) {
+            ) {
                 viewModel.beginStartCountdown()
             }
-            syncLocationSubscription()
+            startCountdownAfterPermission = false
+            if (pendingNotificationAfterPermission) {
+                pendingNotificationAfterPermission = false
+                requestNotificationPermissionIfNeeded()
+            }
+            syncPrewarmLocationSubscription()
+        }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // 无额外逻辑；用户拒绝后仍尝试 startForeground（部分机型会降级）
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecordingNotificationHelper.ensureChannel(this)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(
                 lightScrim = Color.TRANSPARENT,
@@ -74,12 +92,13 @@ class MainActivity : ComponentActivity() {
         enableAdaptiveHighRefreshRate()
         logMapStartupDiagnostics()
         restoreCachedLocation()
+        syncLocationPrecision()
 
         setContent {
             VeloTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
-                LaunchedEffect(state.isRecording, state.isPaused, state.startCountdownSeconds) {
-                    syncLocationSubscription()
+                LaunchedEffect(state.startCountdownSeconds) {
+                    syncPrewarmLocationSubscription()
                 }
                 LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
                     syncKeepScreenOn()
@@ -113,14 +132,20 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         enableAdaptiveHighRefreshRate()
         syncKeepScreenOn()
-        syncLocationSubscription()
+        syncPrewarmLocationSubscription()
+        viewModel.syncRecordingUi()
     }
 
     override fun onPause() {
         super.onPause()
-        viewModel.cancelStartCountdown()
+        val state = viewModel.uiState.value
+        if (!state.isRecording) {
+            viewModel.cancelStartCountdown()
+        }
         setKeepScreenOn(false)
-        locationTracker.stop()
+        if (!state.isRecording) {
+            prewarmLocationTracker.stop()
+        }
     }
 
     override fun onStop() {
@@ -134,7 +159,7 @@ class MainActivity : ComponentActivity() {
         window.isNavigationBarContrastEnforced = false
     }
 
-    private fun dispatchLocation(point: GpsPoint) {
+    private fun dispatchPrewarmLocation(point: GpsPoint) {
         lastLocationStore.write(point)
         viewModel.onLocation(point)
     }
@@ -153,9 +178,12 @@ class MainActivity : ComponentActivity() {
         lastLocationStore.read()?.let(viewModel::restoreLastLocation)
     }
 
-    private fun hasLocationPermission(): Boolean {
-        return hasFineLocationPermission() || hasCoarseLocationPermission()
+    private fun syncLocationPrecision() {
+        viewModel.setLocationPrecision(hasFineLocationPermission())
     }
+
+    private fun hasLocationPermission(): Boolean =
+        hasFineLocationPermission() || hasCoarseLocationPermission()
 
     private fun locationPermissionSnapshot(): LocationPermissionSnapshot =
         LocationPermissionSnapshot(
@@ -169,12 +197,27 @@ class MainActivity : ComponentActivity() {
     private fun hasCoarseLocationPermission(): Boolean =
         ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private fun hasNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     private fun requestLocationPermissions() {
-        val permissions = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-        }
-        permissionLauncher.launch(permissions.toTypedArray())
+        permissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ),
+        )
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (hasNotificationPermission()) return
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun requestStartCountdown() {
@@ -182,8 +225,12 @@ class MainActivity : ComponentActivity() {
         if (state.isRecording || state.startCountdownSeconds != null) return
         if (!hasLocationPermission()) {
             startCountdownAfterPermission = true
+            pendingNotificationAfterPermission = true
             requestLocationPermissions()
             return
+        }
+        if (!hasNotificationPermission()) {
+            requestNotificationPermissionIfNeeded()
         }
         viewModel.beginStartCountdown()
     }
@@ -201,19 +248,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun syncLocationSubscription() {
+    private fun syncPrewarmLocationSubscription() {
         val state = viewModel.uiState.value
-        val shouldPrewarm = state.startCountdownSeconds != null
-        val shouldRecordTrack = state.isRecording && !state.isPaused
-        val shouldUseLocation = shouldPrewarm || shouldRecordTrack
-        if (shouldUseLocation && !hasLocationPermission()) {
+        val shouldPrewarm = state.startCountdownSeconds != null && !state.isRecording
+        if (shouldPrewarm && !hasLocationPermission()) {
             requestLocationPermissions()
             return
         }
-        if (shouldUseLocation && hasLocationPermission()) {
-            locationTracker.start(precise = hasFineLocationPermission())
-        } else if (!shouldUseLocation) {
-            locationTracker.stop()
+        if (shouldPrewarm && hasLocationPermission()) {
+            prewarmLocationTracker.start(precise = hasFineLocationPermission())
+        } else if (!state.isRecording) {
+            prewarmLocationTracker.stop()
         }
     }
 }

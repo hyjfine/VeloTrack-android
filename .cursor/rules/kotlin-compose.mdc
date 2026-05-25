@@ -1,0 +1,39 @@
+---
+description: Kotlin / Compose 编码约定
+globs: app/**/*.kt
+alwaysApply: false
+---
+
+# Kotlin & Compose
+
+## 分层
+
+- **Activity**（`MainActivity`）：权限、`LocationTracker` 生命周期、保屏、注入 `MapProvider`
+- **ViewModel**（`TrackViewModel`）：录制状态机、计时、点过滤、历史/删除/AI；不直接持有 `MapView`
+- **Composable**：只读 `TrackUiState`，通过 lambda 回调；主题用 `VeloTheme` / `VeloColors`
+
+## 状态
+
+```kotlin
+// ✅ 收集状态
+val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+// ✅ ViewModel 内更新
+_uiState.update { it.copy(isRecording = true) }
+```
+
+## 单位与格式
+
+- 内部速度 **m/s**；展示 km/h：`mps * 3.6`
+- 格式化复用 `TrackViewModel.kt` 底部：`formatDistanceMeters`、`formatSpeedKmh`、`formatDurationMs`
+
+## Compose UI
+
+- 颜色/圆角来自 `VeloColors`、`VeloDimens`，勿硬编码偏离 `docs/design-tokens.json`
+- 点击反馈：`Modifier.tapFeedbackClickable` + `rememberTapFeedback()`
+- 停止录制：长按 1.5s，配合 `HoldProgressOverlay` 与 `holdVersion`
+
+## Room
+
+- 改 Entity/Database version 时更新 `app/schemas/` 导出
+- `GpsPoint` 运行时字段（如 `GpsSource`）不持久化，见 `GpsPointEntity`
