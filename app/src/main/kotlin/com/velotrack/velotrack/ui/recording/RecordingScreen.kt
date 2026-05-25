@@ -170,10 +170,21 @@ private fun DebugStatusPanel(
                 DebugLine("signalLost", state.signalLost.toString())
                 DebugLine(
                     "speed",
-                    "ui=${formatSpeedKmh(state.currentSpeedMps)}kph " +
-                        "raw=" + (state.lastRawSpeedMps?.let { String.format(java.util.Locale.US, "%.2fmps/%.1fkph", it, it * 3.6) } ?: "-"),
+                    "ui=${formatSpeedKmh(state.currentSpeedMps)} " +
+                        "drv=" + (state.lastDerivedSpeedMps?.let { formatSpeedKmh(it) } ?: "-") +
+                        " raw=" + (state.lastRawSpeedMps?.let { formatSpeedKmh(it) } ?: "-"),
                 )
-                DebugLine("speed src", state.lastSpeedSource ?: "-")
+                DebugLine("speed algo", "${state.lastSpeedMethod ?: "-"} · ${state.lastSpeedSource ?: "-"}")
+                DebugLine(
+                    "doppler",
+                    "w=" + (state.lastDopplerWeight?.let { java.lang.String.format(java.util.Locale.US, "%.2f", it) } ?: "-") +
+                        " sacc=" + (state.lastSpeedAccuracyMps?.let { java.lang.String.format(java.util.Locale.US, "%.2f", it) + "m/s" } ?: "-"),
+                )
+                DebugLine(
+                    "segment",
+                    "n=" + (state.lastSegmentCount?.toString() ?: "-") +
+                        " dt=" + (state.lastSegmentDtMs?.let { if (it < 0) "-" else "${it}ms" } ?: "-"),
+                )
                 DebugLine(
                     "gnss",
                     state.gnss?.let {

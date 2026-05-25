@@ -22,6 +22,18 @@ data class RecordingSessionState(
     val lastLocationDropReason: String? = null,
     val locationDebugMessage: String? = null,
     val lastRawSpeedMps: Double? = null,
+    /** 位移导数中值速度（m/s），未 EMA。 */
+    val lastDerivedSpeedMps: Double? = null,
     val lastSpeedSource: String? = null,
+    /** derived / fused / doppler / hold-zero */
+    val lastSpeedMethod: String? = null,
+    /** 多普勒在融合中的实际权重（0~1），debug 用。 */
+    val lastDopplerWeight: Double? = null,
+    /** 上一帧 GNSS 多普勒速度 1σ 误差（m/s），debug 用。 */
+    val lastSpeedAccuracyMps: Double? = null,
+    /** 上一段 dt（ms），debug 用；<=0 表示无段。 */
+    val lastSegmentDtMs: Long? = null,
+    /** 本帧参与导数计算的段数，debug 用。 */
+    val lastSegmentCount: Int? = null,
     val gnss: GnssSatelliteSnapshot? = null,
 )

@@ -18,6 +18,16 @@ data class GpsPoint(
     val source: GpsSource = GpsSource.UNKNOWN,
     /** true 表示该样本的速度来自 GNSS，可信度高；false 表示来自网络/WiFi/缓存等。 */
     val isGpsFix: Boolean = false,
+    /**
+     * 该样本到达时的 [android.os.SystemClock.elapsedRealtime] 时刻（毫秒），
+     * 用于段速 dt，避免 Location.time 壁钟跳变 / 缓存帧时间倒置的影响。运行时字段，不持久化。
+     */
+    val monotonicMs: Long = 0L,
+    /**
+     * GNSS 多普勒速度 1σ 误差（m/s），可用于权重判定。仅 API 26+ Location 提供；缺失为 null。
+     * 运行时字段，不持久化。
+     */
+    val speedAccuracyMps: Double? = null,
 )
 
 enum class GpsSource(val label: String) {
@@ -43,6 +53,8 @@ data class Ride(
     val totalDistance: Double,
     val avgSpeed: Double,
     val maxSpeed: Double,
+    /** 有效移动时长（秒），经 [com.velotrack.velotrack.speed.TrackDataFilter] 计算；读库时填充。 */
+    val movingDurationSec: Double = 0.0,
 )
 
 data class LocationPermissionSnapshot(

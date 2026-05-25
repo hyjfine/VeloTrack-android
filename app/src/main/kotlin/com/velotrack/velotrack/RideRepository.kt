@@ -1,8 +1,9 @@
 package com.velotrack.velotrack
 
-import com.velotrack.velotrack.db.RideDao
 import com.velotrack.velotrack.db.GpsPointEntity
+import com.velotrack.velotrack.db.RideDao
 import com.velotrack.velotrack.db.RideEntity
+import com.velotrack.velotrack.speed.TrackDataFilter
 
 class RideRepository(
     private val dao: RideDao,
@@ -82,15 +83,20 @@ class RideRepository(
 
     private fun entityToRide(entity: RideEntity): Ride {
         val points = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
+        val stats = if (points.isNotEmpty()) TrackDataFilter.summarize(points) else null
+        val wallDurationSec = entity.endTime?.let { end ->
+            ((end - entity.startTime).coerceAtLeast(0L) / 1000.0)
+        } ?: 0.0
         return Ride(
             id = entity.id,
             title = entity.title,
             startTime = entity.startTime,
             endTime = entity.endTime,
             points = points,
-            totalDistance = entity.totalDistance,
-            avgSpeed = entity.avgSpeed,
-            maxSpeed = entity.maxSpeed,
+            totalDistance = stats?.totalDistanceM ?: entity.totalDistance,
+            avgSpeed = stats?.avgSpeedMps ?: entity.avgSpeed,
+            maxSpeed = stats?.maxSpeedMps ?: entity.maxSpeed,
+            movingDurationSec = stats?.movingDurationSec?.takeIf { it > 0.0 } ?: wallDurationSec,
         )
     }
 

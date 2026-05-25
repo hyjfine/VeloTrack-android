@@ -184,6 +184,10 @@ private fun HistoryRideRow(
                 ride.title to null
             }
         }
+        val movingDurationMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
+            val fromFilter = (ride.movingDurationSec * 1000).toLong()
+            if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
+        }
         Card(
             shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
             colors = CardDefaults.cardColors(containerColor = VeloColors.white),
@@ -236,9 +240,15 @@ private fun HistoryRideRow(
                                 style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
                             )
                             Text(
-                                formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
+                                formatDurationMs(movingDurationMs),
                                 style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
                             )
+                            if (ride.maxSpeed > 0.0) {
+                                Text(
+                                    "${formatSpeedKmh(ride.maxSpeed)} KPH MAX",
+                                    style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
+                                )
+                            }
                         }
                     }
                 }

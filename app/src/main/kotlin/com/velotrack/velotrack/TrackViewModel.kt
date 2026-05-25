@@ -45,7 +45,13 @@ data class TrackUiState(
     val lastLocationDropReason: String? = null,
     val locationDebugMessage: String? = null,
     val lastRawSpeedMps: Double? = null,
+    val lastDerivedSpeedMps: Double? = null,
     val lastSpeedSource: String? = null,
+    val lastSpeedMethod: String? = null,
+    val lastDopplerWeight: Double? = null,
+    val lastSpeedAccuracyMps: Double? = null,
+    val lastSegmentDtMs: Long? = null,
+    val lastSegmentCount: Int? = null,
     val gnss: GnssSatelliteSnapshot? = null,
 )
 
@@ -313,7 +319,13 @@ class TrackViewModel(
                 lastLocationDropReason = session.lastLocationDropReason,
                 locationDebugMessage = session.locationDebugMessage,
                 lastRawSpeedMps = session.lastRawSpeedMps,
+                lastDerivedSpeedMps = session.lastDerivedSpeedMps,
                 lastSpeedSource = session.lastSpeedSource,
+                lastSpeedMethod = session.lastSpeedMethod,
+                lastDopplerWeight = session.lastDopplerWeight,
+                lastSpeedAccuracyMps = session.lastSpeedAccuracyMps,
+                lastSegmentDtMs = session.lastSegmentDtMs,
+                lastSegmentCount = session.lastSegmentCount,
                 gnss = session.gnss,
             )
         }

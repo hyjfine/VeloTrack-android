@@ -1,17 +1,16 @@
 package com.velotrack.velotrack.recording
 
 import com.velotrack.velotrack.GpsPoint
-import kotlin.math.max
+import com.velotrack.velotrack.speed.SpeedEstimator
 
 /**
- * 将原始定位样本合并进录制会话（与 [com.velotrack.velotrack.TrackViewModel.onLocation] 口径一致）。
+ * 将原始定位样本合并进录制会话。
+ * 瞬时速度以 [SpeedEstimator] 位移导数为主，可信 GNSS 多普勒为辅。
  */
 object RecordingLocationProcessor {
     private const val TRACK_POINT_MAX_ACCURACY_M = 40.0
     private const val GOOD_SIGNAL_MAX_ACCURACY_M = 25.0
     private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
-    private const val STANDSTILL_THRESHOLD_MPS = 0.5
-    private const val SPEED_EMA_ALPHA = 0.4
 
     data class Result(
         val state: RecordingSessionState,
@@ -24,6 +23,7 @@ object RecordingLocationProcessor {
         recordingStartAt: Long,
         isRecording: Boolean,
         isPaused: Boolean,
+        segmentStartIndex: Int = 0,
     ): Result {
         val rawSpeed = point.speedMps
         val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
@@ -36,7 +36,9 @@ object RecordingLocationProcessor {
                     lastLocationCountedInTrack = false,
                     lastLocationDropReason = "accuracy>${MAP_LOCATION_MAX_ACCURACY_M.toInt()}m",
                     lastRawSpeedMps = rawSpeed,
+                    lastDerivedSpeedMps = null,
                     lastSpeedSource = speedSourceLabel,
+                    lastSpeedMethod = null,
                 ),
             )
         }
@@ -52,7 +54,9 @@ object RecordingLocationProcessor {
                     mapCenterLng = point.lng,
                     currentAltitude = point.altitude,
                     lastRawSpeedMps = rawSpeed,
+                    lastDerivedSpeedMps = null,
                     lastSpeedSource = speedSourceLabel,
+                    lastSpeedMethod = null,
                 ),
             )
         }
@@ -68,35 +72,48 @@ object RecordingLocationProcessor {
                     mapCenterLng = point.lng,
                     currentAltitude = point.altitude,
                     lastRawSpeedMps = rawSpeed,
+                    lastDerivedSpeedMps = null,
                     lastSpeedSource = speedSourceLabel,
+                    lastSpeedMethod = null,
                 ),
             )
         }
 
         val canUseForTrack = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
-        val points = if (canUseForTrack) state.livePoints + point else state.livePoints
-        val nextSpeed = if (canUseForTrack && point.isGpsFix) {
-            val gated = if (rawSpeed < STANDSTILL_THRESHOLD_MPS) 0.0 else rawSpeed
-            if (state.currentSpeedMps <= 0.0) {
-                gated
-            } else {
-                SPEED_EMA_ALPHA * gated + (1 - SPEED_EMA_ALPHA) * state.currentSpeedMps
-            }
+
+        val speedEstimate = if (canUseForTrack) {
+            SpeedEstimator.estimate(
+                trackPointsIncludingNew = state.livePoints + point,
+                newPoint = point,
+                previousDisplaySpeedMps = state.currentSpeedMps,
+                rawDopplerMps = rawSpeed,
+                segmentStartIndex = segmentStartIndex,
+            )
         } else {
-            state.currentSpeedMps
+            null
         }
+
+        val nextSpeed = speedEstimate?.displaySpeedMps ?: state.currentSpeedMps
         val dropReason = when {
             !canUseForTrack -> "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
-            !point.isGpsFix -> "speed ignored: non-gps source"
             else -> null
         }
+
+        // 入库存「瞬时速度」（未 EMA），让详情曲线与 RideStats.maxSpeed 更忠实；
+        // 仪表显示用 displaySpeedMps（在 state.currentSpeedMps）。
+        val acceptedPoint = if (canUseForTrack && speedEstimate != null) {
+            point.copy(speedMps = speedEstimate.instantSpeedMps)
+        } else {
+            null
+        }
+        val points = if (acceptedPoint != null) state.livePoints + acceptedPoint else state.livePoints
 
         return Result(
             state = state.copy(
                 livePoints = points,
                 mapCenterLat = point.lat,
                 mapCenterLng = point.lng,
-                currentSpeedMps = max(0.0, nextSpeed),
+                currentSpeedMps = nextSpeed.coerceAtLeast(0.0),
                 currentAltitude = point.altitude,
                 signalLost = point.accuracy > GOOD_SIGNAL_MAX_ACCURACY_M,
                 lastLocationAtMs = point.timestamp,
@@ -104,9 +121,15 @@ object RecordingLocationProcessor {
                 lastLocationCountedInTrack = canUseForTrack,
                 lastLocationDropReason = dropReason,
                 lastRawSpeedMps = rawSpeed,
+                lastDerivedSpeedMps = speedEstimate?.derivedSpeedMps,
                 lastSpeedSource = speedSourceLabel,
+                lastSpeedMethod = speedEstimate?.method,
+                lastDopplerWeight = speedEstimate?.dopplerWeight,
+                lastSpeedAccuracyMps = point.speedAccuracyMps,
+                lastSegmentDtMs = speedEstimate?.lastSegmentDtMs,
+                lastSegmentCount = speedEstimate?.segmentCount,
             ),
-            acceptedPoint = if (canUseForTrack) point else null,
+            acceptedPoint = acceptedPoint,
         )
     }
 }

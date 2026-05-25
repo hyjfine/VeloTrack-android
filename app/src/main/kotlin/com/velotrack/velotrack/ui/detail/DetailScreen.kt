@@ -143,10 +143,14 @@ fun DetailScreen(
 
 @Composable
 private fun StatsGrid(ride: Ride) {
+    val movingMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
+        val fromFilter = (ride.movingDurationSec * 1000).toLong()
+        if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
+    }
     val cells = listOf(
         "Total Distance" to formatDistanceMeters(ride.totalDistance),
         "Average Speed" to "${formatSpeedKmh(ride.avgSpeed)} kph",
-        "Moving Time" to formatDurationMs((ride.endTime ?: 0L) - ride.startTime),
+        "Moving Time" to formatDurationMs(movingMs),
         "Max Speed" to "${formatSpeedKmh(ride.maxSpeed)} kph",
     )
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -183,6 +187,9 @@ private fun RowScope.StatCell(label: String, value: String) {
 
 @Composable
 private fun PerformanceCard(ride: Ride) {
+    val chartSpeedsKmh = remember(ride.id, ride.points.size) {
+        RideStats.chartSpeedMps(ride.points).map { (it * 3.6).toFloat() }
+    }
     Card(
         shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
         colors = CardDefaults.cardColors(containerColor = VeloColors.white),
@@ -207,7 +214,7 @@ private fun PerformanceCard(ride: Ride) {
             }
             Spacer(Modifier.height(32.dp))
             PerformanceLineChart(
-                speedsKmh = ride.points.map { (it.speedMps * 3.6).toFloat() },
+                speedsKmh = chartSpeedsKmh,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(192.dp),
