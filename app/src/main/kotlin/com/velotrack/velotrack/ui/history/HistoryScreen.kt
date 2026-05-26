@@ -234,23 +234,21 @@ private fun HistoryRideRow(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text(
-                                formatDistanceMeters(ride.totalDistance).uppercase(Locale.US),
-                                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
-                            )
-                            Text(
-                                formatDurationMs(movingDurationMs),
-                                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
-                            )
-                            if (ride.maxSpeed > 0.0) {
-                                Text(
-                                    "${formatSpeedKmh(ride.maxSpeed)} KPH MAX",
-                                    style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
-                                )
-                            }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            HistoryMetaText(formatDistanceMeters(ride.totalDistance).uppercase(Locale.US))
+                            HistoryMetaText(formatDurationMs(movingDurationMs))
                         }
                     }
+                }
+                if (ride.maxSpeed > 0.0) {
+                    Spacer(Modifier.width(12.dp))
+                    HistoryMaxSpeed(speedMps = ride.maxSpeed)
                 }
                 Spacer(Modifier.width(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -274,3 +272,36 @@ private fun HistoryRideRow(
         }
     }
 }
+
+@Composable
+private fun HistoryMetaText(text: String) {
+    Text(
+        text,
+        style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun HistoryMaxSpeed(speedMps: Double) {
+    Column(
+        horizontalAlignment = Alignment.End,
+    ) {
+        Text(
+            text = formatSpeedKmh(speedMps),
+            style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.36f), 0.sp),
+            maxLines = 1,
+        )
+        Text(
+            text = "KPH",
+            style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.26f), 1.2.sp),
+            maxLines = 1,
+        )
+        Text(
+            text = "MAX",
+            style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.26f), 1.2.sp),
+            maxLines = 1,
+        )
+    }
+}
+
