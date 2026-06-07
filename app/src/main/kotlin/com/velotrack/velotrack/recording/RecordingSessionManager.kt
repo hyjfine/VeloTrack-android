@@ -114,7 +114,15 @@ class RecordingSessionManager(
             lastLocationMonotonicMs = 0L
             // 恢复录制：开启新段，避免跨过暂停期的位移被算成异常速度。
             segmentStartIndex = _state.value.livePoints.size
-            _state.update { it.copy(isPaused = false, currentSpeedMps = 0.0) }
+            _state.update {
+                it.copy(
+                    isPaused = false,
+                    currentSpeedMps = 0.0,
+                    trackPausedForSignal = false,
+                    consecutiveGoodGpsCount = 0,
+                    consecutiveBadGpsCount = 0,
+                )
+            }
             startLocationTracker(hasFineLocation)
             startElapsedTicker()
         }

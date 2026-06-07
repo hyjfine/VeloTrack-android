@@ -41,6 +41,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.velotrack.velotrack.speed.TrackDataFilter
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
 import com.velotrack.velotrack.ui.rememberTapFeedback
@@ -64,10 +65,13 @@ fun RecordingScreen(
 ) {
     val bottomPad = (VeloDimens.gaugeBottom + navBottom.value).dp
     val deviceHeadingDeg = rememberDeviceHeadingDegrees(enabled = state.isRecording)
+    val trackDisplay = remember(state.livePoints) {
+        TrackDataFilter.displaySnapshot(state.livePoints)
+    }
     Box(Modifier.fillMaxSize()) {
         MapPane(
             provider = provider,
-            points = state.livePoints,
+            points = trackDisplay.points,
             modifier = Modifier.fillMaxSize(),
             followLatestPosition = true,
             mapZoom = DEFAULT_RECORDING_MAP_ZOOM,
@@ -98,7 +102,7 @@ fun RecordingScreen(
             )
             HudDistanceCard(
                 distanceText = if (state.isRecording || state.livePoints.isNotEmpty()) {
-                    formatDistanceMeters(distanceOf(state.livePoints))
+                    formatDistanceMeters(trackDisplay.totalDistanceM)
                 } else {
                     "0.00"
                 },
@@ -108,6 +112,7 @@ fun RecordingScreen(
         if (BuildConfig.DEBUG) {
             DebugStatusPanel(
                 state = state,
+                trackDisplay = trackDisplay,
                 provider = provider,
                 permissions = debugPermissions,
                 modifier = Modifier
@@ -137,6 +142,7 @@ fun RecordingScreen(
 @Composable
 private fun DebugStatusPanel(
     state: TrackUiState,
+    trackDisplay: TrackDataFilter.DisplaySnapshot,
     provider: MapProvider,
     permissions: LocationPermissionSnapshot,
     modifier: Modifier = Modifier,
@@ -163,11 +169,15 @@ private fun DebugStatusPanel(
                 DebugLine("countdown", state.startCountdownSeconds?.toString() ?: "-")
                 DebugLine("permission", "any=${permissions.any} fine=${permissions.fine} coarse=${permissions.coarse}")
                 DebugLine("center", "${formatDebugCoord(state.mapCenterLat)}, ${formatDebugCoord(state.mapCenterLng)}")
-                DebugLine("points", state.livePoints.size.toString())
+                DebugLine("points", "${state.livePoints.size} raw / ${trackDisplay.points.size} display spikes=${trackDisplay.spikePointCount}")
                 DebugLine("last loc", state.lastLocationAtMs?.let { "${formatLocationAgeMs(it)} ago" } ?: "none")
                 DebugLine("accuracy", state.lastLocationAccuracyM?.let { "${it.toInt()}m" } ?: "unknown")
                 DebugLine("track point", state.lastLocationCountedInTrack.toString())
                 DebugLine("signalLost", state.signalLost.toString())
+                DebugLine(
+                    "signal pause",
+                    "${state.trackPausedForSignal} bad=${state.consecutiveBadGpsCount}/2 good=${state.consecutiveGoodGpsCount}/3",
+                )
                 DebugLine(
                     "speed",
                     "ui=${formatSpeedKmh(state.currentSpeedMps)} " +
@@ -450,5 +460,3 @@ private fun MainGaugeCard(
     }
 }
 
-private fun distanceOf(points: List<GpsPoint>): Double =
-    points.zipWithNext().sumOf { (a, b) -> GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng) }

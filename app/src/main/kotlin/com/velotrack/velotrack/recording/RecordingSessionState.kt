@@ -16,6 +16,12 @@ data class RecordingSessionState(
     val mapCenterLng: Double = 121.4737,
     val currentAltitude: Double? = null,
     val signalLost: Boolean = false,
+    /** 信号退化后暂停入库，待连续好点恢复。 */
+    val trackPausedForSignal: Boolean = false,
+    /** 信号恢复阶段已连续满足精度/来源的帧数。 */
+    val consecutiveGoodGpsCount: Int = 0,
+    /** 进入信号暂停前已连续劣化的帧数。 */
+    val consecutiveBadGpsCount: Int = 0,
     val lastLocationAtMs: Long? = null,
     val lastLocationAccuracyM: Double? = null,
     val lastLocationCountedInTrack: Boolean = false,

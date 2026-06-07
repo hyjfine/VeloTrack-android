@@ -44,6 +44,12 @@ object TrackDataFilter {
     /** 孤立尖峰：与前后都很近但中间点漂移很远（米）。 */
     private const val SPIKE_MIN_DETOUR_M = 8.0
 
+    /** 录制时单步位移超过 max(acc)×此系数视为野点。 */
+    private const val OUTLIER_JUMP_ACC_FACTOR = 1.5
+
+    /** 录制时最小可判定的异常跳变（米）。 */
+    private const val OUTLIER_MIN_JUMP_M = 6.0
+
     private const val STORED_SPEED_MAX_RATIO = 0.6
     private const val SLIDING_MAX_WINDOW = 5
     private const val CHART_MEDIAN_WINDOW = 3
@@ -57,6 +63,55 @@ object TrackDataFilter {
         val chartSpeedMps: List<Double>,
         val spikePointCount: Int,
     )
+
+    /** 实时录制 HUD/地图展示：一次尖峰扫描同时产出折线与距离。 */
+    data class DisplaySnapshot(
+        val points: List<GpsPoint>,
+        val totalDistanceM: Double,
+        val spikePointCount: Int,
+    )
+
+    /**
+     * 录制时与上一已入库点比对，返回丢弃原因；null 表示位置合理。
+     */
+    fun rejectReasonForCandidate(previous: GpsPoint?, candidate: GpsPoint): String? {
+        if (previous == null) return null
+        val dist = GeoUtils.haversineMeters(previous.lat, previous.lng, candidate.lat, candidate.lng)
+        val dtMs = segmentDtMs(previous, candidate)
+        if (dtMs > 0L && dtMs <= MAX_SEGMENT_GAP_MS) {
+            val speed = dist / (dtMs / 1000.0)
+            if (speed > MAX_PLAUSIBLE_SPEED_MPS) {
+                return "outlier: speed>${MAX_PLAUSIBLE_SPEED_MPS.toInt()}m/s"
+            }
+        }
+        val maxJumpM = max(previous.accuracy, candidate.accuracy) * OUTLIER_JUMP_ACC_FACTOR
+        if (dist > maxJumpM && dist >= OUTLIER_MIN_JUMP_M) {
+            return "outlier: jump>${maxJumpM.toInt()}m"
+        }
+        return null
+    }
+
+    /** 实时地图展示：剔除尖峰点，与 [summarize] 统计口径一致。 */
+    fun filterForDisplay(points: List<GpsPoint>): List<GpsPoint> =
+        displaySnapshot(points).points
+
+    fun displaySnapshot(points: List<GpsPoint>): DisplaySnapshot {
+        if (points.isEmpty()) {
+            return DisplaySnapshot(emptyList(), 0.0, 0)
+        }
+        val spikes = if (points.size >= 3) detectSpikeIndices(points) else emptySet()
+        val displayPoints = if (spikes.isEmpty()) {
+            points
+        } else {
+            points.filterIndexed { index, _ -> index !in spikes }
+        }
+        val totalDistance = validSegmentDistances(points, spikes).sum()
+        return DisplaySnapshot(
+            points = displayPoints,
+            totalDistanceM = totalDistance,
+            spikePointCount = spikes.size,
+        )
+    }
 
     fun summarize(points: List<GpsPoint>): Summary {
         if (points.isEmpty()) {
