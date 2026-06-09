@@ -22,6 +22,8 @@ data class RecordingSessionState(
     val consecutiveGoodGpsCount: Int = 0,
     /** 进入信号暂停前已连续劣化的帧数。 */
     val consecutiveBadGpsCount: Int = 0,
+    /** 已连续因野点拒绝入库的帧数（好点且满足恢复条件时累计）。 */
+    val consecutiveTrackOutlierCount: Int = 0,
     val lastLocationAtMs: Long? = null,
     val lastLocationAccuracyM: Double? = null,
     val lastLocationCountedInTrack: Boolean = false,

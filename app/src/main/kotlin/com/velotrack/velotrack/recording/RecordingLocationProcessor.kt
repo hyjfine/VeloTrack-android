@@ -18,6 +18,8 @@ object RecordingLocationProcessor {
     private const val SIGNAL_DEGRADE_REQUIRED_COUNT = 2
     /** 信号暂停后需连续好帧数才能恢复入库（迟滞退出）。 */
     private const val SIGNAL_RECOVERY_REQUIRED_COUNT = 3
+    /** 连续野点拒绝达到此值后强制重锚，打破锚点死亡螺旋。 */
+    private const val OUTLIER_REANCHOR_COUNT = 3
 
     data class Result(
         val state: RecordingSessionState,
@@ -108,19 +110,29 @@ object RecordingLocationProcessor {
         val recoverySatisfied = !trackPausedForSignal ||
             consecutiveGoodGpsCount >= SIGNAL_RECOVERY_REQUIRED_COUNT
 
-        val lastAccepted = state.livePoints.lastOrNull()
-        val speedOutlierReason = if (frameGood) {
-            TrackDataFilter.rejectReasonForCandidate(lastAccepted, point)
+        val trackOutlierReason = if (frameGood) {
+            TrackDataFilter.rejectReasonForCandidate(state.livePoints, point)
         } else {
             null
         }
-        val outlierReason = if (frameGood && recoverySatisfied) speedOutlierReason else null
+        val nextConsecutiveTrackOutlierCount = when {
+            !frameGood || !recoverySatisfied || trackOutlierReason == null -> 0
+            else -> state.consecutiveTrackOutlierCount + 1
+        }
+        val forceReanchor = frameGood && recoverySatisfied &&
+            trackOutlierReason != null &&
+            nextConsecutiveTrackOutlierCount >= OUTLIER_REANCHOR_COUNT
+        val outlierReason = if (frameGood && recoverySatisfied && trackOutlierReason != null && !forceReanchor) {
+            trackOutlierReason
+        } else {
+            null
+        }
 
         val canUseForTrack = frameGood && recoverySatisfied && outlierReason == null
 
-        // 仪表速度与轨迹入库解耦：好点且非野点即可估速；迟滞恢复期间避免未入库点污染位移导数。
+        // 仪表速度与轨迹入库解耦：野点不入库但仍可估速；迟滞恢复期间避免未入库点污染位移导数。
         val speedEstimate = when {
-            !frameGood || speedOutlierReason != null -> null
+            !frameGood -> null
             canUseForTrack -> SpeedEstimator.estimate(
                 trackPointsIncludingNew = state.livePoints + point,
                 newPoint = point,
@@ -134,6 +146,17 @@ object RecordingLocationProcessor {
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = 0,
+            )
+            outlierReason != null -> SpeedEstimator.estimate(
+                trackPointsIncludingNew = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) {
+                    listOf(point)
+                } else {
+                    state.livePoints
+                },
+                newPoint = point,
+                previousDisplaySpeedMps = state.currentSpeedMps,
+                rawDopplerMps = rawSpeed,
+                segmentStartIndex = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) 0 else segmentStartIndex,
             )
             else -> SpeedEstimator.estimate(
                 trackPointsIncludingNew = state.livePoints + point,
@@ -153,6 +176,7 @@ object RecordingLocationProcessor {
                 "signal unstable ${nextConsecutiveBadGpsCount}/$SIGNAL_DEGRADE_REQUIRED_COUNT"
             trackPausedForSignal && !recoverySatisfied ->
                 "signal recovery ${consecutiveGoodGpsCount}/$SIGNAL_RECOVERY_REQUIRED_COUNT"
+            forceReanchor -> "outlier re-anchor"
             outlierReason != null -> outlierReason
             else -> null
         }
@@ -180,6 +204,11 @@ object RecordingLocationProcessor {
             frameGood -> 0
             else -> nextConsecutiveBadGpsCount
         }
+        val nextConsecutiveTrackOutlierCountFinal = when {
+            acceptedPoint != null -> 0
+            outlierReason != null -> nextConsecutiveTrackOutlierCount
+            else -> 0
+        }
 
         return Result(
             state = state.copy(
@@ -192,6 +221,7 @@ object RecordingLocationProcessor {
                 trackPausedForSignal = nextTrackPausedForSignal,
                 consecutiveGoodGpsCount = nextConsecutiveGoodGpsCount,
                 consecutiveBadGpsCount = nextConsecutiveBadGpsCountFinal,
+                consecutiveTrackOutlierCount = nextConsecutiveTrackOutlierCountFinal,
                 lastLocationAtMs = point.timestamp,
                 lastLocationAccuracyM = point.accuracy,
                 lastLocationCountedInTrack = acceptedPoint != null,

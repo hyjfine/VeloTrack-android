@@ -233,10 +233,10 @@ class TrackViewModel(
     }
 
     fun onLocationDebug(message: String) {
+        if (_uiState.value.isRecording) return
         if (BuildConfig.DEBUG) {
             DebugLogRecorder.append("LOC", message)
         }
-        if (_uiState.value.isRecording) return
         _uiState.update { it.copy(locationDebugMessage = message) }
     }
 

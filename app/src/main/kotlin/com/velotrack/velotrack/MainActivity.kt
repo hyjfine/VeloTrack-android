@@ -97,10 +97,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             VeloTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
-                LaunchedEffect(state.startCountdownSeconds) {
-                    syncPrewarmLocationSubscription()
-                }
                 LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
+                    syncPrewarmLocationSubscription()
                     syncKeepScreenOn()
                 }
                 VeloMainScreen(
@@ -259,7 +257,7 @@ class MainActivity : ComponentActivity() {
         }
         if (shouldPrewarm && hasLocationPermission()) {
             prewarmLocationTracker.start(precise = hasFineLocationPermission())
-        } else if (!state.isRecording) {
+        } else {
             prewarmLocationTracker.stop()
         }
     }

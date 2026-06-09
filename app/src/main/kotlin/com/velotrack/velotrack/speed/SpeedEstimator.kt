@@ -27,8 +27,8 @@ object SpeedEstimator {
     /** GPS 偶发会推 300ms 间隔的「补点」，dt 太小会把位置抖动放大成几十 km/h。 */
     private const val MIN_SEGMENT_DT_MS = 700L
 
-    /** 基础静止位移阈值（米）；实际取 max(此值, accuracy * 0.3)。 */
-    private const val MIN_SEGMENT_DISTANCE_BASE_M = 2.0
+    /** 基础静止位移阈值（米）；实际取 max(此值, accuracy * 0.3)。略低于 TrackDataFilter，便于起步估速。 */
+    private const val MIN_SEGMENT_DISTANCE_BASE_M = 1.5
     private const val MIN_SEGMENT_DISTANCE_ACC_FACTOR = 0.3
 
     /** 约 90 km/h，单段尖峰丢弃。 */
@@ -43,8 +43,8 @@ object SpeedEstimator {
     private const val DOPPLER_MAX_ACCURACY_M = 15.0
     private const val DOPPLER_MIN_MPS = 0.15
 
-    /** speedAccuracy 已知时优先用；未知时退化到经验权重。 */
-    private const val DOPPLER_BASE_WEIGHT = 0.3
+    /** speedAccuracy 已知时优先用；未知时退化到经验权重（AMap 无 sacc 时偏保守）。 */
+    private const val DOPPLER_BASE_WEIGHT = 0.22
     private const val DOPPLER_WEIGHT_MAX = 0.6
     private const val DOPPLER_SPEED_ACC_GOOD = 0.5      // m/s
     private const val DOPPLER_SPEED_ACC_BAD = 2.5       // m/s
@@ -61,6 +61,9 @@ object SpeedEstimator {
     private const val MAX_ACCEL_MPS2 = 2.5
     /** 强刹车（碟刹）极限（m/s²） */
     private const val MAX_DECEL_MPS2 = 6.0
+
+    /** AMap 不报多普勒时，每帧对位移导数的衰减系数，避免旧速度长期冻结。 */
+    private const val RAW_ZERO_DERIVED_DECAY = 0.88
 
     data class Estimate(
         /** 仪表显示（短 EMA + 加速度限幅） */
@@ -100,6 +103,15 @@ object SpeedEstimator {
         val instant = when {
             derived == null && dopplerWeight > 0.0 -> rawDopplerMps
             derived == null -> 0.0
+            rawDopplerMps < DOPPLER_MIN_MPS && dopplerWeight <= 0.0 -> {
+                val decayed = derived.coerceAtLeast(0.0) *
+                    min(RAW_ZERO_DERIVED_DECAY, if (previousDisplaySpeedMps > 0.0) {
+                        previousDisplaySpeedMps / derived.coerceAtLeast(STANDSTILL_SPEED_MPS)
+                    } else {
+                        RAW_ZERO_DERIVED_DECAY
+                    })
+                decayed.coerceAtLeast(0.0)
+            }
             dopplerWeight > 0.0 -> dopplerWeight * rawDopplerMps + (1.0 - dopplerWeight) * derived.coerceAtLeast(0.0)
             else -> derived
         }
@@ -107,6 +119,7 @@ object SpeedEstimator {
         val method = when {
             derived == null && dopplerWeight > 0.0 -> "doppler"
             derived == null -> "hold-zero"
+            rawDopplerMps < DOPPLER_MIN_MPS && dopplerWeight <= 0.0 -> "derived-decay"
             dopplerWeight > 0.0 -> "fused"
             else -> "derived"
         }
@@ -272,8 +285,8 @@ object SpeedEstimator {
         }
         val ratio = abs(rawDopplerMps - d) / max(d, 1.0)
         val consistency = when {
-            ratio > 0.6 -> 0.0
-            ratio > 0.3 -> 0.5
+            ratio > 0.45 -> 0.0
+            ratio > 0.25 -> 0.5
             else -> 1.0
         }
         return accBased * consistency

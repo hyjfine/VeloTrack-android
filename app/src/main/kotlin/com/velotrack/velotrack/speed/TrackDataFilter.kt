@@ -44,11 +44,14 @@ object TrackDataFilter {
     /** 孤立尖峰：与前后都很近但中间点漂移很远（米）。 */
     private const val SPIKE_MIN_DETOUR_M = 8.0
 
-    /** 录制时单步位移超过 max(acc)×此系数视为野点。 */
+    /** 录制时单步位移超过 max(acc)×此系数视为野点（仅 dt 无效时兜底）。 */
     private const val OUTLIER_JUMP_ACC_FACTOR = 1.5
 
-    /** 录制时最小可判定的异常跳变（米）。 */
-    private const val OUTLIER_MIN_JUMP_M = 6.0
+    /** 录制时最小可判定的异常跳变（米），仅用于无有效 dt 的兜底判断。 */
+    private const val OUTLIER_MIN_JUMP_M = 12.0
+
+    /** 速度一致时允许的位移裕量（相对理论最大位移）。 */
+    private const val OUTLIER_SPEED_MARGIN = 1.15
 
     private const val STORED_SPEED_MAX_RATIO = 0.6
     private const val SLIDING_MAX_WINDOW = 5
@@ -72,10 +75,13 @@ object TrackDataFilter {
     )
 
     /**
-     * 录制时与上一已入库点比对，返回丢弃原因；null 表示位置合理。
+     * 录制时与最近已入库点比对，返回丢弃原因；null 表示位置合理。
+     *
+     * 有效 dt 内仅按段速上限判断，避免合法骑行速度触发固定跳变阈值导致「死亡螺旋」。
      */
-    fun rejectReasonForCandidate(previous: GpsPoint?, candidate: GpsPoint): String? {
-        if (previous == null) return null
+    fun rejectReasonForCandidate(recentAccepted: List<GpsPoint>, candidate: GpsPoint): String? {
+        if (recentAccepted.isEmpty()) return null
+        val previous = recentAccepted.last()
         val dist = GeoUtils.haversineMeters(previous.lat, previous.lng, candidate.lat, candidate.lng)
         val dtMs = segmentDtMs(previous, candidate)
         if (dtMs > 0L && dtMs <= MAX_SEGMENT_GAP_MS) {
@@ -83,13 +89,23 @@ object TrackDataFilter {
             if (speed > MAX_PLAUSIBLE_SPEED_MPS) {
                 return "outlier: speed>${MAX_PLAUSIBLE_SPEED_MPS.toInt()}m/s"
             }
+            return null
         }
-        val maxJumpM = max(previous.accuracy, candidate.accuracy) * OUTLIER_JUMP_ACC_FACTOR
-        if (dist > maxJumpM && dist >= OUTLIER_MIN_JUMP_M) {
-            return "outlier: jump>${maxJumpM.toInt()}m"
+        val dtSec = if (dtMs > 0L) dtMs / 1000.0 else 1.0
+        val accJumpM = max(previous.accuracy, candidate.accuracy) * OUTLIER_JUMP_ACC_FACTOR
+        val speedJumpM = MAX_PLAUSIBLE_SPEED_MPS * dtSec * OUTLIER_SPEED_MARGIN
+        val thresholdM = max(accJumpM, speedJumpM)
+        if (dist > thresholdM && dist >= OUTLIER_MIN_JUMP_M) {
+            return "outlier: jump>${thresholdM.toInt()}m"
         }
         return null
     }
+
+    fun rejectReasonForCandidate(previous: GpsPoint?, candidate: GpsPoint): String? =
+        rejectReasonForCandidate(
+            recentAccepted = if (previous == null) emptyList() else listOf(previous),
+            candidate = candidate,
+        )
 
     /** 实时地图展示：剔除尖峰点，与 [summarize] 统计口径一致。 */
     fun filterForDisplay(points: List<GpsPoint>): List<GpsPoint> =

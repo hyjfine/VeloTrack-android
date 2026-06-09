@@ -23,6 +23,7 @@ internal object DebugLogFormats {
             append(" pause=").append(state.trackPausedForSignal)
             append(" bad=").append(state.consecutiveBadGpsCount).append("/2")
             append(" good=").append(state.consecutiveGoodGpsCount).append("/3")
+            append(" outlier=").append(state.consecutiveTrackOutlierCount).append("/3")
             append(" pts=").append(state.livePoints.size)
         }
     }
