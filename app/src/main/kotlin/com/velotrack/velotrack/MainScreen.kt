@@ -43,6 +43,8 @@ fun VeloMainScreen(
     onCancelDelete: () -> Unit,
     onAnalyze: () -> Unit,
     onBackDetail: () -> Unit,
+    onToggleDebugLog: () -> Unit = {},
+    onSaveDebugLog: () -> Unit = {},
 ) {
     VeloSystemBars()
 
@@ -79,6 +81,8 @@ fun VeloMainScreen(
                     onStopRecording = onStopRecording,
                     onBeginHold = onBeginHold,
                     onEndHold = onEndHold,
+                    onToggleDebugLog = onToggleDebugLog,
+                    onSaveDebugLog = onSaveDebugLog,
                 )
             }
             AnimatedVisibility(

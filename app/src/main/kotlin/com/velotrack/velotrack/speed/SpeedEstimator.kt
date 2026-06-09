@@ -3,6 +3,8 @@ package com.velotrack.velotrack.speed
 import android.util.Log
 import com.velotrack.velotrack.GeoUtils
 import com.velotrack.velotrack.GpsPoint
+import com.velotrack.velotrack.debug.DebugLogFormats
+import com.velotrack.velotrack.debug.DebugLogRecorder
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -133,6 +135,23 @@ object SpeedEstimator {
                     " gnss=" + newPoint.isGpsFix +
                     " src=" + newPoint.source.label +
                     " segStart=" + segmentStartIndex + "/" + trackPointsIncludingNew.size,
+            )
+        }
+        if (DebugLogRecorder.isRecording) {
+            DebugLogRecorder.append(
+                "SPEED",
+                DebugLogFormats.speedLine(
+                    rawKmh = rawDopplerMps * 3.6,
+                    drvKmh = derived?.times(3.6),
+                    insKmh = gatedInstant * 3.6,
+                    uiKmh = display * 3.6,
+                    prevKmh = previousDisplaySpeedMps * 3.6,
+                    method = method,
+                    weight = dopplerWeight,
+                    segments = derivedSummary.count,
+                    dtMs = lastDt,
+                    point = newPoint,
+                ),
             )
         }
         return Estimate(

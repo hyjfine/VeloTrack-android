@@ -6,8 +6,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.velotrack.velotrack.debug.DebugLogExporter
+import com.velotrack.velotrack.debug.DebugLogRecorder
 import com.velotrack.velotrack.recording.RecordingSessionState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +59,9 @@ data class TrackUiState(
     val lastSegmentDtMs: Long? = null,
     val lastSegmentCount: Int? = null,
     val gnss: GnssSatelliteSnapshot? = null,
+    val debugLogRecording: Boolean = false,
+    val debugLogLineCount: Int = 0,
+    val debugLogStatus: String? = null,
 )
 
 class TrackViewModel(
@@ -73,6 +79,7 @@ class TrackViewModel(
         private set
 
     init {
+        DebugLogRecorder.onStateChanged = ::syncDebugLogUi
         loadHistory()
         viewModelScope.launch {
             recording.state.collect { session -> mergeRecordingSession(session) }
@@ -226,8 +233,47 @@ class TrackViewModel(
     }
 
     fun onLocationDebug(message: String) {
+        if (BuildConfig.DEBUG) {
+            DebugLogRecorder.append("LOC", message)
+        }
         if (_uiState.value.isRecording) return
         _uiState.update { it.copy(locationDebugMessage = message) }
+    }
+
+    fun toggleDebugLog() {
+        if (!BuildConfig.DEBUG) return
+        val recording = DebugLogRecorder.toggle()
+        _uiState.update {
+            it.copy(
+                debugLogRecording = recording,
+                debugLogLineCount = DebugLogRecorder.lineCount,
+                debugLogStatus = if (recording) "recording..." else "stopped",
+            )
+        }
+    }
+
+    fun saveDebugLog() {
+        if (!BuildConfig.DEBUG) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = DebugLogExporter.save(getApplication(), DebugLogRecorder.snapshot())
+            withContext(Dispatchers.Main) {
+                _uiState.update {
+                    it.copy(
+                        debugLogLineCount = DebugLogRecorder.lineCount,
+                        debugLogStatus = result.statusText,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun syncDebugLogUi() {
+        _uiState.update {
+            it.copy(
+                debugLogRecording = DebugLogRecorder.isRecording,
+                debugLogLineCount = DebugLogRecorder.lineCount,
+            )
+        }
     }
 
     fun loadHistory() {

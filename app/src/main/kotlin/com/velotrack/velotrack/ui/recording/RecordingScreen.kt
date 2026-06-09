@@ -62,6 +62,8 @@ fun RecordingScreen(
     onStopRecording: () -> Unit,
     onBeginHold: () -> Unit,
     onEndHold: () -> Unit,
+    onToggleDebugLog: () -> Unit = {},
+    onSaveDebugLog: () -> Unit = {},
 ) {
     val bottomPad = (VeloDimens.gaugeBottom + navBottom.value).dp
     val deviceHeadingDeg = rememberDeviceHeadingDegrees(enabled = state.isRecording)
@@ -115,6 +117,8 @@ fun RecordingScreen(
                 trackDisplay = trackDisplay,
                 provider = provider,
                 permissions = debugPermissions,
+                onToggleDebugLog = onToggleDebugLog,
+                onSaveDebugLog = onSaveDebugLog,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .statusBarsPadding()
@@ -145,6 +149,8 @@ private fun DebugStatusPanel(
     trackDisplay: TrackDataFilter.DisplaySnapshot,
     provider: MapProvider,
     permissions: LocationPermissionSnapshot,
+    onToggleDebugLog: () -> Unit,
+    onSaveDebugLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -152,16 +158,22 @@ private fun DebugStatusPanel(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.68f)),
         border = BorderStroke(1.dp, VeloColors.accent.copy(alpha = 0.45f)),
-        modifier = modifier
-            .widthIn(max = 360.dp)
-            .clickable { expanded = !expanded },
+        modifier = modifier.widthIn(max = 360.dp),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                text = if (expanded) "DEBUG GPS ▲" else "DEBUG GPS ▼  ${state.locationDebugMessage ?: "tap"}",
-                style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.accent),
-                maxLines = 1,
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (expanded) "DEBUG GPS ▲" else "DEBUG GPS ▼  ${state.locationDebugMessage ?: "tap"}",
+                    style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.accent),
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
                 DebugLine("provider", provider.displayName)
@@ -204,8 +216,76 @@ private fun DebugStatusPanel(
                 )
                 DebugLine("reason", state.lastLocationDropReason ?: "-")
                 DebugLine("event", state.locationDebugMessage ?: "-")
+                Spacer(Modifier.height(8.dp))
+                DebugLogControls(
+                    recording = state.debugLogRecording,
+                    lineCount = state.debugLogLineCount,
+                    status = state.debugLogStatus,
+                    onToggleRecording = onToggleDebugLog,
+                    onSave = onSaveDebugLog,
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun DebugLogControls(
+    recording: Boolean,
+    lineCount: Int,
+    status: String?,
+    onToggleRecording: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        DebugActionButton(
+            label = if (recording) "Stop Log" else "Start Log",
+            modifier = Modifier.weight(1f),
+            onClick = onToggleRecording,
+        )
+        DebugActionButton(
+            label = "Save Log",
+            modifier = Modifier.weight(1f),
+            onClick = onSave,
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = buildString {
+            append(if (recording) "recording" else "idle")
+            append(" · ")
+            append(lineCount)
+            append(" lines")
+            status?.let {
+                append('\n')
+                append(it)
+            }
+        },
+        style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.gray400),
+    )
+}
+
+@Composable
+private fun DebugActionButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(VeloColors.accent.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.accent),
+        )
     }
 }
 

@@ -5,8 +5,11 @@ import android.content.Intent
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.velotrack.velotrack.BuildConfig
 import com.velotrack.velotrack.GnssSatelliteSnapshot
 import com.velotrack.velotrack.GpsPoint
+import com.velotrack.velotrack.debug.DebugLogFormats
+import com.velotrack.velotrack.debug.DebugLogRecorder
 import com.velotrack.velotrack.LastLocationStore
 import com.velotrack.velotrack.LocationTracker
 import com.velotrack.velotrack.MapProvider
@@ -62,6 +65,8 @@ class RecordingSessionManager(
 
     /** 最近一次有效定位到达时的 elapsedRealtime；用于心跳归零。 */
     private var lastLocationMonotonicMs = 0L
+
+    private var lastGnssLogMonotonicMs = 0L
 
     private val mapProviderRef = mapProvider
 
@@ -212,8 +217,16 @@ class RecordingSessionManager(
             segmentStartIndex = segmentStartIndex,
         )
         _state.value = result.state
-        if (result.acceptedPoint != null) {
+        if (BuildConfig.DEBUG && DebugLogRecorder.isRecording) {
+            DebugLogRecorder.append(
+                "PROC",
+                DebugLogFormats.procLine(result.state, result.acceptedPoint != null),
+            )
+        }
+        if (result.acceptedPoint != null || result.state.lastSpeedMethod != null) {
             lastLocationMonotonicMs = SystemClock.elapsedRealtime()
+        }
+        if (result.acceptedPoint != null) {
             pendingFlushPoints.add(result.acceptedPoint)
             if (pendingFlushPoints.size >= FLUSH_BATCH_SIZE) {
                 flushPendingPoints()
@@ -235,9 +248,19 @@ class RecordingSessionManager(
 
     fun onGnssStatus(snapshot: GnssSatelliteSnapshot) {
         _state.update { it.copy(gnss = snapshot) }
+        if (BuildConfig.DEBUG && DebugLogRecorder.isRecording) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastGnssLogMonotonicMs >= 2_000L) {
+                lastGnssLogMonotonicMs = now
+                DebugLogRecorder.append("GNSS", DebugLogFormats.gnssLine(snapshot))
+            }
+        }
     }
 
     fun onLocationDebug(message: String) {
+        if (BuildConfig.DEBUG) {
+            DebugLogRecorder.append("LOC", message)
+        }
         _state.update { it.copy(locationDebugMessage = message) }
     }
 

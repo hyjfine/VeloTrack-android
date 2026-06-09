@@ -11,6 +11,8 @@ import com.velotrack.velotrack.speed.TrackDataFilter
  */
 object RecordingLocationProcessor {
     private const val TRACK_POINT_MAX_ACCURACY_M = 20.0
+    /** 迟滞恢复期间仅用 GNSS Doppler 估速的精度上限（与 SpeedEstimator 一致）。 */
+    private const val SPEED_DOPPLER_ONLY_MAX_ACCURACY_M = 15.0
     private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
     /** 连续劣化帧数达到此值才进入信号暂停（迟滞进入）。 */
     private const val SIGNAL_DEGRADE_REQUIRED_COUNT = 2
@@ -107,24 +109,39 @@ object RecordingLocationProcessor {
             consecutiveGoodGpsCount >= SIGNAL_RECOVERY_REQUIRED_COUNT
 
         val lastAccepted = state.livePoints.lastOrNull()
-        val outlierReason = if (frameGood && recoverySatisfied) {
+        val speedOutlierReason = if (frameGood) {
             TrackDataFilter.rejectReasonForCandidate(lastAccepted, point)
         } else {
             null
         }
+        val outlierReason = if (frameGood && recoverySatisfied) speedOutlierReason else null
 
         val canUseForTrack = frameGood && recoverySatisfied && outlierReason == null
 
-        val speedEstimate = if (canUseForTrack) {
-            SpeedEstimator.estimate(
+        // 仪表速度与轨迹入库解耦：好点且非野点即可估速；迟滞恢复期间避免未入库点污染位移导数。
+        val speedEstimate = when {
+            !frameGood || speedOutlierReason != null -> null
+            canUseForTrack -> SpeedEstimator.estimate(
                 trackPointsIncludingNew = state.livePoints + point,
                 newPoint = point,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = segmentStartIndex,
             )
-        } else {
-            null
+            trackPausedForSignal && point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M -> SpeedEstimator.estimate(
+                trackPointsIncludingNew = listOf(point),
+                newPoint = point,
+                previousDisplaySpeedMps = state.currentSpeedMps,
+                rawDopplerMps = rawSpeed,
+                segmentStartIndex = 0,
+            )
+            else -> SpeedEstimator.estimate(
+                trackPointsIncludingNew = state.livePoints + point,
+                newPoint = point,
+                previousDisplaySpeedMps = state.currentSpeedMps,
+                rawDopplerMps = rawSpeed,
+                segmentStartIndex = segmentStartIndex,
+            )
         }
 
         val nextSpeed = speedEstimate?.displaySpeedMps ?: state.currentSpeedMps
