@@ -9,6 +9,9 @@
     "warn":        "#F97316",
     "danger":      "#EF4444",
     "mapBg":       "#151619",
+    "surfaceDark": "rgba(26,28,31,0.95)",
+    "surfaceDarkSoft": "rgba(34,37,41,0.90)",
+    "surfaceElevated": "#FAFAFC",
     "polyline":    "#E2FF3B",
     "mutedText":   "#B4B4BA",
     "divider":     "#F0F0F2",
@@ -24,8 +27,8 @@
     "full": 9999
   },
   "spacing": {
-    "bottomNavReserve": 160,
-    "gaugeBottom":      128,
+    "bottomNavReserve": 112,
+    "gaugeBottom":      112,
     "hudTop":           48,
     "sidePadding":      24
   },
@@ -55,6 +58,12 @@
     "longPressMs":    1500,
     "pressScaleButton": 0.90,
     "pressScaleCard":   0.97
+  },
+  "effects": {
+    "glassGlowRadius": 96,
+    "modalBackdropBlur": 10,
+    "glassBorderOpacity": 0.11,
+    "glassHighlightOpacity": 0.055
   },
   "map": {
     "tileUrl": "https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png",

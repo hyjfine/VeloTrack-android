@@ -7,6 +7,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -53,10 +54,11 @@ fun Modifier.tapFeedbackClickable(
     onClick: () -> Unit,
 ): Modifier = composed {
     val tapFeedback = rememberTapFeedback()
+    val indication = LocalIndication.current
     clickable(
         enabled = enabled,
         interactionSource = interactionSource ?: remember { MutableInteractionSource() },
-        indication = null,
+        indication = indication,
     ) {
         tapFeedback()
         onClick()

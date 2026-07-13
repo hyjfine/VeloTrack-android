@@ -1,5 +1,17 @@
 package com.velotrack.velotrack
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,11 +32,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,8 +48,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
+import com.velotrack.velotrack.ui.VeloGlassSurface
 import com.velotrack.velotrack.ui.rememberTapFeedback
 import com.velotrack.velotrack.ui.tabularTextStyle
 import kotlinx.coroutines.coroutineScope
@@ -84,40 +99,14 @@ fun RecordingScreen(
             showRouteHeadArrow = state.isRecording,
             routeHeadHeadingDeg = deviceHeadingDeg,
         )
-        Row(
-            Modifier
+        RecordingHud(
+            state = state,
+            modifier = Modifier
                 .statusBarsPadding()
                 .padding(top = VeloDimens.hudTopExtra.dp)
                 .padding(horizontal = VeloDimens.sidePadding.dp)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            HudStatusCard(
-                title = when {
-                    state.isRestoringRecording -> "RESTORING"
-                    state.isSavingRide -> "SAVING"
-                    state.recordingErrorMessage?.contains("保存失败") == true -> "SAVE FAILED"
-                    state.recordingErrorMessage?.contains("未完成骑行") == true -> "RIDE RESTORED"
-                    state.recordingErrorMessage?.contains("权限") == true -> "LOCATION NEEDED"
-                    state.recordingErrorMessage != null -> "SERVICE ERROR"
-                    state.locationPermissionDenied -> "LOCATION NEEDED"
-                    state.startCountdownSeconds != null -> "READY"
-                    state.isRecording && state.signalLost -> "SIGNAL LOST"
-                    state.isRecording -> "TRACKING"
-                    else -> "GPS IDLE"
-                },
-                value = formatDurationMs(state.elapsedMs),
-                pulse = state.isRecording && !state.isPaused && !state.signalLost,
-            )
-            HudDistanceCard(
-                distanceText = if (state.isRecording || state.livePoints.isNotEmpty()) {
-                    formatDistanceMeters(state.liveDistanceM)
-                } else {
-                    "0.00"
-                },
-            )
-        }
-
+        )
         if (BuildConfig.DEBUG) {
             DebugStatusPanel(
                 state = state,
@@ -128,7 +117,7 @@ fun RecordingScreen(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .statusBarsPadding()
-                    .padding(top = 116.dp)
+                    .padding(top = 148.dp)
                     .padding(horizontal = VeloDimens.sidePadding.dp),
             )
         }
@@ -317,73 +306,89 @@ private fun formatLocationAgeMs(timestamp: Long): String {
 }
 
 @Composable
-private fun HudStatusCard(title: String, value: String, pulse: Boolean) {
-    Card(
-        shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.hudWhite),
-        border = BorderStroke(1.dp, VeloColors.divider),
-        modifier = Modifier.shadow(8.dp, RoundedCornerShape(VeloDimens.radiusSm.dp)),
+private fun RecordingHud(state: TrackUiState, modifier: Modifier = Modifier) {
+    val status = when {
+        state.isRestoringRecording -> "正在恢复"
+        state.isSavingRide -> "正在保存"
+        state.recordingErrorMessage?.contains("保存失败") == true -> "保存失败"
+        state.recordingErrorMessage?.contains("未完成骑行") == true -> "已恢复记录"
+        state.recordingErrorMessage?.contains("权限") == true -> "需要定位权限"
+        state.recordingErrorMessage != null -> "服务异常"
+        state.locationPermissionDenied -> "需要定位权限"
+        state.startCountdownSeconds != null -> "准备出发"
+        state.isRecording && state.signalLost -> "GPS 信号较弱"
+        state.isRecording && state.isPaused -> "已暂停"
+        state.isRecording -> "正在记录"
+        else -> "等待骑行"
+    }
+    val statusColor = when {
+        state.recordingErrorMessage != null || state.locationPermissionDenied -> VeloColors.danger
+        state.isPaused -> VeloColors.warn
+        state.isRecording && !state.signalLost -> VeloColors.accent
+        else -> VeloColors.mutedText
+    }
+    VeloGlassSurface(
+        shape = RoundedCornerShape(22.dp),
+        baseColor = VeloColors.surfaceDarkSoft,
+        shadowElevation = 10.dp,
+        modifier = modifier,
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                title == "SIGNAL LOST" -> VeloColors.mutedText
-                                pulse -> VeloColors.danger
-                                else -> VeloColors.mutedText
-                            },
-                        ),
-                )
-                Spacer(Modifier.width(8.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        status,
+                        style = tabularTextStyle(11.sp, FontWeight.Bold, Color.White.copy(alpha = 0.86f), 0.5.sp),
+                    )
+                }
                 Text(
-                    text = title,
-                    style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.4f)),
+                    formatDurationMs(state.elapsedMs),
+                    style = tabularTextStyle(22.sp, FontWeight.Bold, Color.White, (-0.2).sp),
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            Text(
-                text = value,
-                style = tabularTextStyle(24.sp, FontWeight.Bold, VeloColors.foreground),
-                modifier = Modifier.padding(top = 4.dp),
-            )
+            Box(Modifier.width(1.dp).height(36.dp).background(Color.White.copy(alpha = 0.10f)))
+            Column(
+                Modifier
+                    .weight(0.72f)
+                    .padding(start = 18.dp),
+                horizontalAlignment = Alignment.End,
+            ) {
+                Text(
+                    "骑行距离",
+                    style = tabularTextStyle(9.sp, FontWeight.Bold, Color.White.copy(alpha = 0.42f), 1.2.sp),
+                )
+                Text(
+                    if (state.isRecording || state.livePoints.isNotEmpty()) {
+                        formatDistanceMeters(state.liveDistanceM)
+                    } else {
+                        "0m"
+                    },
+                    style = tabularTextStyle(20.sp, FontWeight.Bold, Color.White),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun HudDistanceCard(distanceText: String) {
-    Card(
-        shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.hudWhite),
-        modifier = Modifier.shadow(8.dp, RoundedCornerShape(VeloDimens.radiusSm.dp)),
-    ) {
-        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.End) {
-            Text(
-                "DISTANCE",
-                style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.4f)),
-            )
-            Text(
-                distanceText,
-                style = tabularTextStyle(20.sp, FontWeight.Bold, VeloColors.foreground),
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun MainGaugeCard(
+internal fun MainGaugeCard(
     state: TrackUiState,
-    modifier: Modifier = Modifier,
     onStartRecording: () -> Unit,
     onCancelStartCountdown: () -> Unit,
     onTogglePause: () -> Unit,
     onStopRecording: () -> Unit,
     onBeginHold: () -> Unit,
     onEndHold: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val countdownSeconds = state.startCountdownSeconds
     val isCountingDown = countdownSeconds != null
@@ -391,76 +396,137 @@ private fun MainGaugeCard(
         isCountingDown -> VeloColors.accent
         !state.isRecording -> VeloColors.accent
         state.isPaused -> VeloColors.warn
-        else -> VeloColors.foreground
+        else -> VeloColors.white
     }
     val btnFg = when {
         isCountingDown -> VeloColors.foreground
         !state.isRecording -> VeloColors.foreground
         state.isPaused -> Color.White
-        else -> VeloColors.accent
+        else -> VeloColors.foreground
+    }
+    val actionVisual = when {
+        countdownSeconds != null -> countdownSeconds
+        !state.isRecording || state.isPaused -> ACTION_VISUAL_PLAY
+        else -> ACTION_VISUAL_PAUSE
+    }
+    val actionDescription = when {
+        state.isSavingRide -> "正在保存骑行"
+        isCountingDown -> "取消开始录制倒计时"
+        !state.isRecording -> "开始录制"
+        state.isPaused -> "继续录制，长按停止"
+        else -> "暂停录制，长按停止"
+    }
+    val footerMessage = when {
+        state.isSavingRide -> GaugeFooterMessage("正在保存骑行记录…")
+        state.recordingErrorMessage != null -> GaugeFooterMessage(state.recordingErrorMessage, isError = true)
+        state.isRecording -> GaugeFooterMessage("轻触暂停  ·  长按 1.5 秒结束骑行")
+        else -> null
     }
     val tapFeedback = rememberTapFeedback()
+    val performPrimaryAction: () -> Boolean = {
+        when {
+            state.isSavingRide || state.isRestoringRecording -> false
+            isCountingDown -> {
+                tapFeedback()
+                onCancelStartCountdown()
+                true
+            }
+            !state.isRecording -> {
+                tapFeedback()
+                onStartRecording()
+                true
+            }
+            else -> {
+                tapFeedback()
+                onTogglePause()
+                true
+            }
+        }
+    }
+    val performStopAction: () -> Boolean = {
+        if (state.isRecording && !state.isSavingRide && !state.isRestoringRecording) {
+            tapFeedback()
+            onStopRecording()
+            true
+        } else {
+            false
+        }
+    }
     Card(
-        shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.white),
+        shape = RoundedCornerShape(30.dp),
+        colors = CardDefaults.cardColors(containerColor = VeloColors.surfaceDark),
         modifier = modifier
             .fillMaxWidth()
-            .shadow(24.dp, RoundedCornerShape(VeloDimens.radiusXl.dp)),
-        border = BorderStroke(1.dp, VeloColors.divider),
+            .testTag(MAIN_GAUGE_TEST_TAG)
+            .shadow(20.dp, RoundedCornerShape(30.dp)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
     ) {
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 28.dp, vertical = 32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 24.dp, vertical = 22.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(min = 0.dp),
-                contentAlignment = Alignment.Center,
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f)) {
+                    AnimatedContent(
+                        targetState = state.isPaused,
+                        transitionSpec = {
+                            (
+                                fadeIn(tween(170, delayMillis = 30)) +
+                                    scaleIn(tween(220, easing = FastOutSlowInEasing), initialScale = 0.92f) +
+                                    slideInVertically(tween(220, easing = FastOutSlowInEasing)) { it / 2 }
+                                ).togetherWith(
+                                fadeOut(tween(120)) +
+                                    scaleOut(tween(150), targetScale = 1.05f) +
+                                    slideOutVertically(tween(150)) { -it / 2 },
+                            )
+                        },
+                        label = "speed_state_label",
+                    ) { paused ->
                         Text(
-                            "SPEED",
-                            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.22f)),
-                        )
-                        Text(
-                            "KPH",
-                            style = tabularTextStyle(8.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.18f)),
+                            if (paused) "已暂停 · PAUSED" else "当前速度 · SPEED",
+                            style = tabularTextStyle(
+                                10.sp,
+                                FontWeight.Bold,
+                                if (paused) VeloColors.warn else Color.White.copy(alpha = 0.44f),
+                                1.2.sp,
+                            ),
                         )
                     }
-                    Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) {
                         Text(
                             text = formatSpeedKmh(if (state.isPaused) 0.0 else state.currentSpeedMps),
-                            style = tabularTextStyle(42.sp, FontWeight.Bold, VeloColors.foreground),
+                            style = tabularTextStyle(56.sp, FontWeight.Bold, Color.White, (-1.2).sp),
                             maxLines = 1,
                             softWrap = false,
                         )
+                        Text(
+                            "km/h",
+                            style = tabularTextStyle(11.sp, FontWeight.Bold, Color.White.copy(alpha = 0.42f), 0.5.sp),
+                            modifier = Modifier.padding(start = 7.dp, bottom = 10.dp),
+                        )
                     }
                 }
-            }
-            Box(
-                Modifier
-                    .width(78.dp)
-                    .height(78.dp),
-                contentAlignment = Alignment.Center,
-            ) {
                 Box(
                     modifier = Modifier
-                        .size(72.dp)
+                        .size(82.dp)
+                        .testTag(RECORD_ACTION_TEST_TAG)
+                        .shadow(14.dp, CircleShape)
                         .clip(CircleShape)
                         .background(btnBg)
                         .semantics {
                             role = Role.Button
-                            contentDescription = when {
-                                state.isSavingRide -> "正在保存骑行"
-                                isCountingDown -> "取消开始录制倒计时"
-                                !state.isRecording -> "开始录制"
-                                state.isPaused -> "继续录制，长按停止"
-                                else -> "暂停录制，长按停止"
+                            contentDescription = actionDescription
+                            onClick(label = actionDescription) { performPrimaryAction() }
+                            if (state.isRecording && !state.isSavingRide && !state.isRestoringRecording) {
+                                onLongClick(label = "结束骑行") { performStopAction() }
                             }
                         }
                         .pointerInput(
@@ -475,13 +541,11 @@ private fun MainGaugeCard(
                                         return@detectTapGestures
                                     }
                                     if (isCountingDown) {
-                                        tapFeedback()
-                                        onCancelStartCountdown()
+                                        performPrimaryAction()
                                         return@detectTapGestures
                                     }
                                     if (!state.isRecording) {
-                                        tapFeedback()
-                                        onStartRecording()
+                                        performPrimaryAction()
                                         return@detectTapGestures
                                     }
                                     onBeginHold()
@@ -497,8 +561,7 @@ private fun MainGaugeCard(
                                         job.cancel()
                                         onEndHold()
                                         if (released && !longHoldReached) {
-                                            tapFeedback()
-                                            onTogglePause()
+                                            performPrimaryAction()
                                         }
                                     }
                                 },
@@ -506,69 +569,166 @@ private fun MainGaugeCard(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (countdownSeconds != null) {
-                        Text(
-                            text = countdownSeconds.toString(),
-                            style = tabularTextStyle(30.sp, FontWeight.Bold, btnFg),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = when {
-                                !state.isRecording -> Icons.Filled.PlayArrow
-                                state.isPaused -> Icons.Filled.PlayArrow
-                                else -> Icons.Filled.Pause
-                            },
-                            contentDescription = null,
-                            tint = btnFg,
-                            modifier = Modifier.size(28.dp),
-                        )
+                    AnimatedContent(
+                        targetState = actionVisual,
+                        transitionSpec = {
+                            (
+                                fadeIn(tween(160, delayMillis = 40)) +
+                                    scaleIn(tween(240, easing = FastOutSlowInEasing), initialScale = 0.68f) +
+                                    slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { it / 5 }
+                                ).togetherWith(
+                                fadeOut(tween(120)) +
+                                    scaleOut(tween(150), targetScale = 1.16f) +
+                                    slideOutHorizontally(tween(140)) { -it / 6 },
+                            )
+                        },
+                        label = "record_action_visual",
+                    ) { visual ->
+                        if (visual >= 0) {
+                            Text(
+                                text = visual.toString(),
+                                style = tabularTextStyle(32.sp, FontWeight.Bold, btnFg),
+                            )
+                        } else {
+                            Icon(
+                                painter = painterResource(
+                                    if (visual == ACTION_VISUAL_PLAY) {
+                                        R.drawable.ic_velo_play
+                                    } else {
+                                        R.drawable.ic_velo_pause
+                                    },
+                                ),
+                                contentDescription = null,
+                                tint = btnFg,
+                                modifier = Modifier.size(34.dp),
+                            )
+                        }
                     }
                 }
-                if (state.isRecording) {
-                    Text(
-                        when {
-                            state.isSavingRide -> "SAVING..."
-                            state.recordingErrorMessage != null -> state.recordingErrorMessage
-                            else -> "HOLD TO STOP"
-                        },
-                        style = tabularTextStyle(
-                            if (state.recordingErrorMessage != null) 7.sp else 8.sp,
-                            FontWeight.Bold,
-                            if (state.recordingErrorMessage != null) VeloColors.danger else VeloColors.mutedText.copy(alpha = 0.3f),
-                        ),
-                        maxLines = 2,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .offset(y = 28.dp)
-                            .widthIn(max = 150.dp),
-                    )
-                }
+            }
+            HorizontalDivider(
+                Modifier.padding(vertical = 16.dp),
+                color = Color.White.copy(alpha = 0.09f),
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GaugeMetric(
+                    "海拔",
+                    (state.currentAltitude ?: 0.0).toInt().toString(),
+                    unit = "m",
+                    modifier = Modifier.weight(1f),
+                )
+                GaugeMetric(
+                    "GPS 精度",
+                    state.lastLocationAccuracyM?.toInt()?.toString() ?: "--",
+                    unit = "m",
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                )
+                GaugeMetric(
+                    "状态",
+                    when {
+                        state.isSavingRide -> "保存中"
+                        state.isPaused -> "暂停"
+                        state.isRecording -> "记录中"
+                        else -> "待机"
+                    },
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.End,
+                    animateValue = true,
+                )
             }
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .widthIn(min = 0.dp),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .testTag(GAUGE_FOOTER_TEST_TAG),
+                contentAlignment = Alignment.BottomStart,
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                AnimatedContent(
+                    targetState = footerMessage,
+                    transitionSpec = {
+                        (fadeIn(tween(170)) + slideInVertically(tween(210)) { it / 2 })
+                            .togetherWith(fadeOut(tween(120)) + slideOutVertically(tween(150)) { -it / 2 })
+                    },
+                    contentAlignment = Alignment.BottomStart,
+                    label = "gauge_footer_message",
+                ) { message ->
+                    if (message != null) {
                         Text(
-                            "ALTITUDE",
-                            style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.22f)),
-                        )
-                        Text(
-                            "M",
-                            style = tabularTextStyle(8.sp, FontWeight.Black, VeloColors.foreground.copy(alpha = 0.18f)),
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
-                        Text(
-                            text = (state.currentAltitude ?: 0.0).toInt().toString(),
-                            style = tabularTextStyle(30.sp, FontWeight.Bold, VeloColors.foreground),
+                            message.text,
+                            style = tabularTextStyle(
+                                9.sp,
+                                FontWeight.Bold,
+                                if (message.isError) VeloColors.danger else Color.White.copy(alpha = 0.34f),
+                                0.7.sp,
+                            ),
+                            maxLines = 2,
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+private const val ACTION_VISUAL_PLAY = -1
+private const val ACTION_VISUAL_PAUSE = -2
+internal const val RECORD_ACTION_TEST_TAG = "record_action_button"
+internal const val MAIN_GAUGE_TEST_TAG = "main_gauge_card"
+internal const val GAUGE_FOOTER_TEST_TAG = "gauge_footer"
+
+private data class GaugeFooterMessage(val text: String, val isError: Boolean = false)
+
+@Composable
+private fun GaugeMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    unit: String? = null,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    animateValue: Boolean = false,
+) {
+    Column(modifier = modifier, horizontalAlignment = horizontalAlignment) {
+        Text(
+            label,
+            style = tabularTextStyle(9.sp, FontWeight.Bold, Color.White.copy(alpha = 0.34f), 1.sp),
+        )
+        if (animateValue) {
+            AnimatedContent(
+                targetState = value,
+                transitionSpec = {
+                    (
+                        fadeIn(tween(160, delayMillis = 25)) +
+                            slideInVertically(tween(210, easing = FastOutSlowInEasing)) { it / 2 }
+                        ).togetherWith(
+                        fadeOut(tween(120)) +
+                            slideOutVertically(tween(150)) { -it / 2 },
+                    )
+                },
+                label = "gauge_metric_value",
+                modifier = Modifier.padding(top = 5.dp),
+            ) { animatedValue ->
+                GaugeMetricValue(animatedValue, unit)
+            }
+        } else {
+            GaugeMetricValue(value, unit, Modifier.padding(top = 5.dp))
+        }
+    }
+}
+
+@Composable
+private fun GaugeMetricValue(value: String, unit: String?, modifier: Modifier = Modifier) {
+    Row(verticalAlignment = Alignment.Bottom, modifier = modifier) {
+        Text(value, style = tabularTextStyle(18.sp, FontWeight.Bold, Color.White))
+        if (unit != null) {
+            Text(
+                unit,
+                style = tabularTextStyle(9.sp, FontWeight.Bold, Color.White.copy(alpha = 0.4f)),
+                modifier = Modifier.padding(start = 3.dp, bottom = 2.dp),
+            )
         }
     }
 }

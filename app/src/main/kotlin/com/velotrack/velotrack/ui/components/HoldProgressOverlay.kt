@@ -13,7 +13,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.velotrack.velotrack.ui.VeloColors
 import kotlinx.coroutines.delay
@@ -37,14 +36,14 @@ fun HoldProgressOverlay(isHolding: Boolean, holdVersion: Int, modifier: Modifier
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(6.dp)
-                .background(Color.Black.copy(alpha = 0.1f)),
+                .height(3.dp)
+                .background(VeloColors.surfaceDark.copy(alpha = 0.28f)),
         ) {
             Box(
                 Modifier
                     .fillMaxWidth(progress)
                     .fillMaxHeight()
-                    .background(VeloColors.warn),
+                    .background(VeloColors.accent),
             )
         }
     }

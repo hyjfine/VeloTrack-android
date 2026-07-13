@@ -19,6 +19,9 @@
 | `warn` | 暂停态按钮背景 | `bg-orange-500` |
 | `danger` | 删除、危险操作 | `text-red-500` |
 | `mapBg` | 地图底色 | `.leaflet-container` |
+| `surfaceDark` | 录制主仪表、悬浮导航 | 深色运动仪表层 |
+| `surfaceDarkSoft` | 地图顶部 HUD | 次级半透明深色层 |
+| `surfaceElevated` | 浅色页面的高层级内容 | 轻微冷白色 |
 | `polyline` | 轨迹线 | 同 accent |
 | `mutedText` | 次级文字 | `opacity-30` 近似，用 `#B4B4BA` |
 | `divider` | 卡片边框 | `gray-100` → `#F0F0F2` |
@@ -55,6 +58,17 @@
 | `stagger` | `0.05s` 或 `0.1s` | 列表项 / stats 级联 |
 | `longPressMs` | `1500` | 停止按钮 |
 | `pressScale` | `0.9` / `0.97` | 按钮 / 卡片按下 |
+
+### `effects`
+
+| key | 值 | 用途 |
+|---|---:|---|
+| `glassGlowRadius` | 96 | HUD 内径向渐变柔光；避免 MapView 与 RenderEffect 合成闪黑 |
+| `modalBackdropBlur` | 10 | 删除弹窗出现时模糊底层页面 |
+| `glassBorderOpacity` | 0.11 | 深色玻璃材质的白色高光描边 |
+| `glassHighlightOpacity` | 0.055 | 玻璃材质顶部高光渐变 |
+
+实时地图不做持续全屏背景采样。录制 HUD 和底部导航使用半透明渐变、描边与小面积柔光模拟毛玻璃，兼顾高德/Google MapView 兼容性和录制续航。
 
 ### `typography`
 
