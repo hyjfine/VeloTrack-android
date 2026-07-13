@@ -2,9 +2,11 @@ package com.velotrack.velotrack.recording
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.velotrack.velotrack.BuildConfig
 import com.velotrack.velotrack.GnssSatelliteSnapshot
 import com.velotrack.velotrack.GpsPoint
@@ -17,9 +19,12 @@ import com.velotrack.velotrack.Ride
 import com.velotrack.velotrack.RideRepository
 import com.velotrack.velotrack.RideStats
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +48,7 @@ class RecordingSessionManager(
     private val io = Dispatchers.IO
     private val lastLocationStore = LastLocationStore(appContext)
 
-    private val _state = MutableStateFlow(RecordingSessionState())
+    private val _state = MutableStateFlow(RecordingSessionState(isRestoring = true))
     val state: StateFlow<RecordingSessionState> = _state.asStateFlow()
 
     private val _stopEvents = MutableSharedFlow<Ride>(extraBufferCapacity = 1)
@@ -52,6 +57,13 @@ class RecordingSessionManager(
     private var locationTracker: LocationTracker? = null
     private var elapsedTicker: Job? = null
     private var flushJob: Job? = null
+
+    /** 所有 Room 写操作严格接在前一任务之后，避免 Begin/Append/Finalize 在 IO 线程池中乱序。 */
+    private var dbWriteTail: Job = SupervisorJob().apply { complete() }
+    private var recoveryStarted = false
+    private var recoveryFinished = false
+    private val recoveryCallbacks = mutableListOf<(Boolean) -> Unit>()
+    private var serviceRunning = false
 
     private var recordingStartAt = 0L
     private var accumulatedElapsed = 0L
@@ -70,8 +82,16 @@ class RecordingSessionManager(
 
     private val mapProviderRef = mapProvider
 
+    init {
+        recoverActiveDraft()
+    }
+
     fun startRecording(hasFineLocation: Boolean) {
-        if (_state.value.isRecording) return
+        if (_state.value.isRecording || _state.value.isRestoring) return
+        if (!hasFineLocation) {
+            _state.update { it.copy(persistenceError = "需要精确定位权限才能开始录制") }
+            return
+        }
         val rideId = System.currentTimeMillis().toString()
         val now = System.currentTimeMillis()
         recordingStartAt = now
@@ -94,9 +114,8 @@ class RecordingSessionManager(
             mapCenterLng = _state.value.mapCenterLng,
         )
 
-        scope.launch(io) {
-            runCatching { repo.beginDraftRide(rideId, rideTitle, now) }
-                .onFailure { e -> Log.e(TAG, "beginDraftRide failed", e) }
+        enqueueDbWrite("beginDraftRide") {
+            repo.beginDraftRide(rideId, rideTitle, now)
         }
 
         startLocationTracker(hasFineLocation)
@@ -107,7 +126,7 @@ class RecordingSessionManager(
 
     fun togglePause(hasFineLocation: Boolean) {
         val s = _state.value
-        if (!s.isRecording) return
+        if (!s.isRecording || s.isSaving) return
         if (!s.isPaused) {
             accumulatedElapsed += elapsedSinceTickerAnchor()
             elapsedTicker?.cancel()
@@ -134,7 +153,7 @@ class RecordingSessionManager(
         notifyService()
     }
 
-    fun pause() = togglePause(hasFineLocation = true)
+    fun pause() = togglePause(hasFineLocation = hasFineLocationPermission())
 
     fun resume(hasFineLocation: Boolean) {
         if (_state.value.isRecording && _state.value.isPaused) {
@@ -142,9 +161,23 @@ class RecordingSessionManager(
         }
     }
 
+    fun resumeWithCurrentPermission() {
+        if (!hasFineLocationPermission()) {
+            _state.update {
+                it.copy(
+                    isPaused = true,
+                    currentSpeedMps = 0.0,
+                    persistenceError = "需要精确定位权限才能继续录制",
+                )
+            }
+            return
+        }
+        resume(hasFineLocation = true)
+    }
+
     fun stopRecording(onComplete: (Ride?) -> Unit) {
         val s = _state.value
-        if (!s.isRecording) {
+        if (!s.isRecording || s.isSaving) {
             onComplete(null)
             return
         }
@@ -177,22 +210,41 @@ class RecordingSessionManager(
             movingDurationSec = stats.movingDurationSec,
         )
 
-        _state.value = RecordingSessionState(
-            mapCenterLat = s.mapCenterLat,
-            mapCenterLng = s.mapCenterLng,
-            currentAltitude = s.currentAltitude,
-        )
+        _state.update {
+            it.copy(
+                isPaused = true,
+                isSaving = true,
+                currentSpeedMps = 0.0,
+                persistenceError = null,
+            )
+        }
 
-        scope.launch(io) {
-            runCatching { repo.finalizeRide(ride) }
-                .onFailure { e ->
-                    Log.e(TAG, "finalizeRide failed", e)
-                    runCatching { repo.deleteDraftRide(rideId) }
-                }
-            withContext(Dispatchers.Main) {
+        // 先把不足一个 batch 的点排入队列，再让最终事务排在所有增量写之后。
+        flushPendingPoints()
+        val finalize = enqueueDbWrite("finalizeRide") { repo.finalizeRide(ride) }
+        scope.launch {
+            val result = finalize.await()
+            if (result.isSuccess) {
+                _state.value = RecordingSessionState(
+                    mapCenterLat = s.mapCenterLat,
+                    mapCenterLng = s.mapCenterLng,
+                    currentAltitude = s.currentAltitude,
+                )
                 stopForegroundService()
                 _stopEvents.tryEmit(ride)
                 onComplete(ride)
+            } else {
+                val error = result.exceptionOrNull()
+                Log.e(TAG, "finalizeRide failed; draft retained for retry", error)
+                _state.update {
+                    it.copy(
+                        isSaving = false,
+                        isPaused = true,
+                        persistenceError = "保存失败，请长按停止重试",
+                    )
+                }
+                notifyService()
+                onComplete(null)
             }
         }
     }
@@ -266,11 +318,98 @@ class RecordingSessionManager(
 
     fun attachService(): RecordingSessionState = _state.value
 
+    fun setServiceRunning(running: Boolean) {
+        serviceRunning = running
+    }
+
+    /**
+     * 进程异常退出后把未完成草稿恢复为“已暂停”会话。用户确认恢复后再继续定位，
+     * 避免 Application 启动阶段在后台擅自开启定位。
+     */
+    fun recoverActiveDraft(onComplete: (Boolean) -> Unit = {}) {
+        if (recoveryFinished) {
+            onComplete(_state.value.isRecording)
+            return
+        }
+        recoveryCallbacks += onComplete
+        if (recoveryStarted) return
+        recoveryStarted = true
+        scope.launch {
+            val draft = withContext(io) { runCatching { repo.getActiveDraftRide() } }
+            val ride = draft.getOrElse {
+                Log.e(TAG, "recover active draft failed", it)
+                finishRecovery(false)
+                return@launch
+            }
+            if (ride == null || _state.value.isRecording) {
+                _state.update { it.copy(isRestoring = false) }
+                finishRecovery(_state.value.isRecording)
+                return@launch
+            }
+            val points = ride.points
+            val display = com.velotrack.velotrack.speed.TrackDataFilter.displaySnapshot(points)
+            val spikes = com.velotrack.velotrack.speed.TrackDataFilter.spikeIndices(points)
+            val elapsed = if (points.size >= 2) {
+                (points.last().timestamp - points.first().timestamp).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            recordingStartAt = ride.startTime
+            accumulatedElapsed = elapsed
+            persistedPointCount = points.size
+            pendingFlushPoints = mutableListOf()
+            rideTitle = ride.title
+            segmentStartIndex = points.size
+            val last = points.lastOrNull()
+            _state.value = RecordingSessionState(
+                isRestoring = false,
+                isRecording = true,
+                isPaused = true,
+                rideId = ride.id,
+                recordingStartAt = ride.startTime,
+                elapsedMs = elapsed,
+                livePoints = points,
+                displayPoints = display.points,
+                mapPoints = com.velotrack.velotrack.speed.TrackDataFilter.downsampleForMap(display.points),
+                displayDistanceM = display.totalDistanceM,
+                spikePointIndices = spikes,
+                mapCenterLat = last?.lat ?: _state.value.mapCenterLat,
+                mapCenterLng = last?.lng ?: _state.value.mapCenterLng,
+                currentAltitude = last?.altitude,
+                persistenceError = "检测到未完成骑行，已暂停恢复",
+            )
+            Log.i(TAG, "recovered draft rideId=${ride.id} points=${points.size}")
+            finishRecovery(true)
+        }
+    }
+
+    private fun finishRecovery(recovered: Boolean) {
+        recoveryFinished = true
+        _state.update { it.copy(isRestoring = false) }
+        val callbacks = recoveryCallbacks.toList()
+        recoveryCallbacks.clear()
+        callbacks.forEach { it(recovered) }
+    }
+
     fun notifyService() {
-        startForegroundService(RecordingForegroundService.ACTION_UPDATE)
+        if (serviceRunning) {
+            RecordingNotificationHelper.updateNotification(appContext, _state.value)
+        } else {
+            startForegroundService(RecordingForegroundService.ACTION_UPDATE)
+        }
     }
 
     private fun startLocationTracker(precise: Boolean) {
+        if (!precise || !hasFineLocationPermission()) {
+            _state.update {
+                it.copy(
+                    isPaused = true,
+                    currentSpeedMps = 0.0,
+                    persistenceError = "需要精确定位权限才能记录轨迹",
+                )
+            }
+            return
+        }
         locationTracker?.stop()
         locationTracker = LocationTracker(
             appContext,
@@ -319,19 +458,59 @@ class RecordingSessionManager(
         pendingFlushPoints.clear()
         val startIndex = persistedPointCount
         persistedPointCount += batch.size
-        scope.launch(io) {
-            runCatching { repo.appendTrackPoints(rideId, startIndex, batch) }
-                .onFailure { e -> Log.e(TAG, "appendTrackPoints failed", e) }
+        enqueueDbWrite("appendTrackPoints") {
+            repo.appendTrackPoints(rideId, startIndex, batch)
         }
     }
+
+    private fun enqueueDbWrite(
+        operation: String,
+        block: () -> Unit,
+    ): Deferred<Result<Unit>> {
+        val previous = dbWriteTail
+        val task = scope.async(io, start = CoroutineStart.LAZY) {
+            previous.join()
+            var lastError: Throwable? = null
+            repeat(DB_WRITE_ATTEMPTS) { attempt ->
+                val result = runCatching(block)
+                if (result.isSuccess) return@async Result.success(Unit)
+                lastError = result.exceptionOrNull()
+                Log.w(TAG, "$operation failed attempt=${attempt + 1}/$DB_WRITE_ATTEMPTS", lastError)
+                if (attempt < DB_WRITE_ATTEMPTS - 1) delay(DB_RETRY_DELAY_MS * (attempt + 1))
+            }
+            Result.failure(lastError ?: IllegalStateException("$operation failed"))
+        }
+        dbWriteTail = task
+        task.start()
+        return task
+    }
+
+    private fun hasFineLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            appContext,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
 
     private fun startForegroundService(action: String) {
         val intent = Intent(appContext, RecordingForegroundService::class.java).apply {
             this.action = action
         }
-        appContext.startForegroundService(intent)
+        runCatching { appContext.startForegroundService(intent) }
+            .onFailure { error ->
+                Log.e(TAG, "start foreground service failed action=$action", error)
+                locationTracker?.stop()
+                locationTracker = null
+                _state.update {
+                    it.copy(
+                        isPaused = true,
+                        currentSpeedMps = 0.0,
+                        persistenceError = "后台录制服务启动失败，请重试",
+                    )
+                }
+            }
     }
 
+    @Suppress("ImplicitSamInstance")
     private fun stopForegroundService() {
         appContext.stopService(Intent(appContext, RecordingForegroundService::class.java))
     }
@@ -340,6 +519,8 @@ class RecordingSessionManager(
         private const val TAG = "VeloRecording"
         private const val FLUSH_BATCH_SIZE = 10
         private const val FLUSH_INTERVAL_MS = 30_000L
+        private const val DB_WRITE_ATTEMPTS = 3
+        private const val DB_RETRY_DELAY_MS = 250L
 
         /** 连续 4s 没有新有效点，仪表显示速度归零。 */
         private const val LOCATION_SILENCE_ZERO_MS = 4_000L

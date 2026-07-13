@@ -186,6 +186,11 @@ object RecordingLocationProcessor {
         } else {
             null
         }
+        val displayUpdate = if (acceptedPoint != null) {
+            updateDisplayTrack(state, acceptedPoint)
+        } else {
+            null
+        }
         val points = if (acceptedPoint != null) state.livePoints + acceptedPoint else state.livePoints
 
         val nextTrackPausedForSignal = when {
@@ -213,6 +218,10 @@ object RecordingLocationProcessor {
         return Result(
             state = state.copy(
                 livePoints = points,
+                displayPoints = displayUpdate?.points ?: state.displayPoints,
+                mapPoints = displayUpdate?.mapPoints ?: state.mapPoints,
+                displayDistanceM = displayUpdate?.distanceM ?: state.displayDistanceM,
+                spikePointIndices = displayUpdate?.spikeIndices ?: state.spikePointIndices,
                 mapCenterLat = if (frameGood) point.lat else state.mapCenterLat,
                 mapCenterLng = if (frameGood) point.lng else state.mapCenterLng,
                 currentSpeedMps = nextSpeed.coerceAtLeast(0.0),
@@ -239,6 +248,64 @@ object RecordingLocationProcessor {
         )
     }
 
+    private data class DisplayUpdate(
+        val points: List<GpsPoint>,
+        val mapPoints: List<GpsPoint>,
+        val distanceM: Double,
+        val spikeIndices: Set<Int>,
+    )
+
+    private fun updateDisplayTrack(state: RecordingSessionState, acceptedPoint: GpsPoint): DisplayUpdate {
+        val raw = state.livePoints
+        if (raw.isEmpty()) {
+            return DisplayUpdate(
+                points = listOf(acceptedPoint),
+                mapPoints = listOf(acceptedPoint),
+                distanceM = 0.0,
+                spikeIndices = emptySet(),
+            )
+        }
+
+        val previousIndex = raw.lastIndex
+        val previous = raw.last()
+        val previousPrevious = raw.getOrNull(previousIndex - 1)
+        val previousIsNewSpike = previousPrevious != null &&
+            TrackDataFilter.isPositionSpike(previousPrevious, previous, acceptedPoint)
+        val nextSpikes = if (previousIsNewSpike) {
+            state.spikePointIndices + previousIndex
+        } else {
+            state.spikePointIndices
+        }
+        val nextDisplay = if (previousIsNewSpike) {
+            state.displayPoints.dropLast(1) + acceptedPoint
+        } else {
+            state.displayPoints + acceptedPoint
+        }
+        val segmentDistance = TrackDataFilter.validSegmentDistanceMeters(previous, acceptedPoint) ?: 0.0
+        val previousSegmentDistance = previousPrevious?.let {
+            TrackDataFilter.validSegmentDistanceMeters(it, previous)
+        } ?: 0.0
+        val distance = when {
+            previousIsNewSpike && previousIndex - 1 !in state.spikePointIndices ->
+                state.displayDistanceM - previousSegmentDistance
+            previousIndex in state.spikePointIndices -> state.displayDistanceM
+            else -> state.displayDistanceM + segmentDistance
+        }.coerceAtLeast(0.0)
+
+        val nextMapBase = if (previousIsNewSpike) state.mapPoints.dropLast(1) else state.mapPoints
+        val nextMap = reduceMapPointsIfNeeded(nextMapBase + acceptedPoint)
+        return DisplayUpdate(nextDisplay, nextMap, distance, nextSpikes)
+    }
+
+    private fun reduceMapPointsIfNeeded(points: List<GpsPoint>): List<GpsPoint> {
+        if (points.size <= MAX_LIVE_MAP_POINTS) return points
+        val reduced = ArrayList<GpsPoint>(points.size / 2 + 2)
+        points.forEachIndexed { index, point ->
+            if (index == 0 || index == points.lastIndex || index % 2 == 0) reduced += point
+        }
+        return reduced
+    }
+
     private fun GpsPoint.isTrustworthyTrackSource(): Boolean {
         if (!isGpsFix) return false
         return when (source) {
@@ -249,4 +316,6 @@ object RecordingLocationProcessor {
             else -> false
         }
     }
+
+    private const val MAX_LIVE_MAP_POINTS = 2_000
 }

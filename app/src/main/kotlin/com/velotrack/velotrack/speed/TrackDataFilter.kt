@@ -115,7 +115,7 @@ object TrackDataFilter {
         if (points.isEmpty()) {
             return DisplaySnapshot(emptyList(), 0.0, 0)
         }
-        val spikes = if (points.size >= 3) detectSpikeIndices(points) else emptySet()
+        val spikes = spikeIndices(points)
         val displayPoints = if (spikes.isEmpty()) {
             points
         } else {
@@ -129,11 +129,23 @@ object TrackDataFilter {
         )
     }
 
+    /** 将长轨迹限制到地图可承受的点数，始终保留首尾点。 */
+    fun downsampleForMap(points: List<GpsPoint>, maxPoints: Int = 2_000): List<GpsPoint> {
+        require(maxPoints >= 2)
+        var result = points
+        while (result.size > maxPoints) {
+            result = result.filterIndexed { index, _ ->
+                index == 0 || index == result.lastIndex || index % 2 == 0
+            }
+        }
+        return result
+    }
+
     fun summarize(points: List<GpsPoint>): Summary {
         if (points.isEmpty()) {
             return Summary(0.0, 0.0, 0.0, 0.0, emptyList(), 0)
         }
-        val spikes = detectSpikeIndices(points)
+        val spikes = spikeIndices(points)
         val segmentSpeeds = validSegmentSpeeds(points, spikes)
         val totalDistance = validSegmentDistances(points, spikes).sum()
         val movingMs = validMovingDurationMs(points, spikes)
@@ -154,7 +166,7 @@ object TrackDataFilter {
     // 尖峰检测
     // -----------------------------------------------------------------
 
-    private fun detectSpikeIndices(points: List<GpsPoint>): Set<Int> {
+    fun spikeIndices(points: List<GpsPoint>): Set<Int> {
         if (points.size < 3) return emptySet()
         val spikes = mutableSetOf<Int>()
         for (i in 1 until points.size - 1) {
@@ -165,7 +177,7 @@ object TrackDataFilter {
         return spikes
     }
 
-    private fun isPositionSpike(a: GpsPoint, b: GpsPoint, c: GpsPoint): Boolean {
+    fun isPositionSpike(a: GpsPoint, b: GpsPoint, c: GpsPoint): Boolean {
         val dAb = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
         val dBc = GeoUtils.haversineMeters(b.lat, b.lng, c.lat, c.lng)
         val dAc = GeoUtils.haversineMeters(a.lat, a.lng, c.lat, c.lng)
@@ -206,6 +218,13 @@ object TrackDataFilter {
             out.add(GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng))
         }
         return out
+    }
+
+    /** 与实时累计距离相同的段有效性口径。 */
+    fun validSegmentDistanceMeters(a: GpsPoint, b: GpsPoint): Double? {
+        val dtMs = segmentDtMs(a, b)
+        if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) return null
+        return GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
     }
 
     private fun validMovingDurationMs(points: List<GpsPoint>, spikes: Set<Int>): Long {

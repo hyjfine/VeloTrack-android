@@ -1,7 +1,8 @@
-sdk.dir=/Users/hyjfine/Library/Android/sdk
-flutter.sdk=/Users/hyjfine/Sdk/flutter
-flutter.buildMode=debug
-flutter.versionName=1.0.0
-flutter.versionCode=1
-GEMINI_API_KEY=AIzaSyDejhGIA3QF8of5GxY3UQgamyxLqiHKYF8
-AMAP_API_KEY=ff74c67bed750169870c11d97ea76724
+# 本文件只记录配置项名称，禁止提交本机路径或真实密钥。
+# 请将实际值写入被 Git 忽略的 local.properties，或由 CI Secret 注入。
+
+GOOGLE_MAPS_API_KEY=your_google_maps_key
+AMAP_API_KEY=your_amap_key
+GEMINI_API_KEY=debug_only_gemini_key
+AI_PROXY_URL=https://your-service.example.com/analyze
+MAP_PROVIDER=AMAP|GOOGLE

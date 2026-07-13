@@ -2,6 +2,7 @@ package com.velotrack.velotrack
 
 import android.app.Application
 import android.util.Log
+import androidx.core.content.edit
 import com.amap.api.location.AMapLocationClient
 import com.amap.api.maps.MapsInitializer
 import com.velotrack.velotrack.db.AppDatabase
@@ -19,6 +20,28 @@ class VeloApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        if (isPrivacyAccepted()) {
+            initializeMapPrivacySdk()
+        }
+
+        val repo = RideRepository(AppDatabase.get(this).rideDao())
+        recordingManager = RecordingSessionManager(
+            applicationContext,
+            repo,
+            MapProviderSelector.select(),
+        )
+    }
+
+    fun isPrivacyAccepted(): Boolean =
+        getSharedPreferences(PRIVACY_PREFS, MODE_PRIVATE).getBoolean(KEY_PRIVACY_ACCEPTED, false)
+
+    fun acceptPrivacy() {
+        getSharedPreferences(PRIVACY_PREFS, MODE_PRIVATE)
+            .edit { putBoolean(KEY_PRIVACY_ACCEPTED, true) }
+        initializeMapPrivacySdk()
+    }
+
+    private fun initializeMapPrivacySdk() {
         runCatching {
             MapsInitializer.updatePrivacyShow(this, true, true)
             MapsInitializer.updatePrivacyAgree(this, true)
@@ -30,16 +53,11 @@ class VeloApp : Application() {
         }.onFailure { e ->
             Log.e("VeloTrack", "AMap privacy init failed", e)
         }
-
-        val repo = RideRepository(AppDatabase.get(this).rideDao())
-        recordingManager = RecordingSessionManager(
-            applicationContext,
-            repo,
-            MapProviderSelector.select(),
-        )
     }
 
     companion object {
+        private const val PRIVACY_PREFS = "privacy_consent"
+        private const val KEY_PRIVACY_ACCEPTED = "accepted_v1"
         lateinit var instance: VeloApp
             private set
     }

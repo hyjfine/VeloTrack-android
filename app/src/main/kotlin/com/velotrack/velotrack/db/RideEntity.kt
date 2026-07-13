@@ -14,6 +14,7 @@ data class RideEntity(
     val totalDistance: Double,
     val avgSpeed: Double,
     val maxSpeed: Double,
+    val movingDurationSec: Double,
 )
 
 @Entity(

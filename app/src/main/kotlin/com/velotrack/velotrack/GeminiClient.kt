@@ -41,12 +41,22 @@ object GeminiClient {
         "gemini-1.5-flash-8b",
     )
 
-    fun generateContent(apiKey: String, prompt: String, requestId: String = "manual"): String {
+    fun generateContent(
+        apiKey: String,
+        prompt: String,
+        requestId: String = "manual",
+        proxyUrl: String = "",
+    ): String {
         Log.d(
             LOG_TAG,
             "generateContent enter requestId=$requestId models=${MODELS.joinToString()} " +
-                "apiKeyConfigured=${apiKey.isNotBlank()} promptChars=${prompt.length}",
+                "apiKeyConfigured=${apiKey.isNotBlank()} proxyConfigured=${proxyUrl.isNotBlank()} promptChars=${prompt.length}",
         )
+        if (proxyUrl.isNotBlank()) {
+            return retryNetworkErrors(requestId, "proxy") {
+                executeProxy(proxyUrl, prompt, requestId)
+            }
+        }
         if (apiKey.isBlank()) {
             Log.w(LOG_TAG, "generateContent missing api key requestId=$requestId")
             throw GeminiProxyException(
@@ -75,6 +85,37 @@ object GeminiClient {
             GeminiProxyException.Reason.ServerRejected,
             "AI_PROXY_FAILED: no Gemini model attempts were made",
         )
+    }
+
+    private fun executeProxy(proxyUrl: String, prompt: String, requestId: String): String {
+        val bodyJson = JSONObject()
+            .put("requestId", requestId)
+            .put("prompt", prompt)
+            .toString()
+        val request = Request.Builder()
+            .url(proxyUrl)
+            .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        client.newCall(request).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw GeminiProxyException(
+                    if (response.code == 429) GeminiProxyException.Reason.RateLimited
+                    else GeminiProxyException.Reason.ServerRejected,
+                    "AI_PROXY_FAILED: HTTP ${response.code}",
+                    httpCode = response.code,
+                    errorStatus = responseErrorStatus(raw),
+                )
+            }
+            val text = runCatching { JSONObject(raw).optString("text") }.getOrDefault("")
+            if (text.isBlank()) {
+                throw GeminiProxyException(
+                    GeminiProxyException.Reason.EmptyResponse,
+                    "AI_PROXY_FAILED: Empty proxy response",
+                )
+            }
+            return text
+        }
     }
 
     private fun executeGenerateContent(apiKey: String, prompt: String, requestId: String, model: String): String {

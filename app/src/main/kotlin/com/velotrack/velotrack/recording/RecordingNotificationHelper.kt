@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.velotrack.velotrack.MainActivity
 import com.velotrack.velotrack.R
@@ -21,7 +20,6 @@ object RecordingNotificationHelper {
     const val ACTION_STOP = "com.velotrack.velotrack.recording.STOP"
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -57,20 +55,20 @@ object RecordingNotificationHelper {
 
         val pauseResumeAction = if (state.isPaused) {
             NotificationCompat.Action(
-                R.drawable.ic_launcher_background,
+                R.drawable.ic_stat_velotrack,
                 context.getString(R.string.recording_action_resume),
                 servicePendingIntent(context, ACTION_RESUME, 1),
             )
         } else {
             NotificationCompat.Action(
-                R.drawable.ic_launcher_background,
+                R.drawable.ic_stat_velotrack,
                 context.getString(R.string.recording_action_pause),
                 servicePendingIntent(context, ACTION_PAUSE, 2),
             )
         }
 
         return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_velotrack)
             .setContentTitle(contentTitle)
             .setContentText(contentText)
             .setContentIntent(openApp)
@@ -79,11 +77,18 @@ object RecordingNotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .addAction(pauseResumeAction)
             .addAction(
-                R.drawable.ic_launcher_background,
+                R.drawable.ic_stat_velotrack,
                 context.getString(R.string.recording_action_stop),
                 servicePendingIntent(context, ACTION_STOP, 3),
             )
             .build()
+    }
+
+    fun updateNotification(context: Context, state: RecordingSessionState) {
+        runCatching {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, buildNotification(context, state))
+        }
     }
 
     private fun servicePendingIntent(context: Context, action: String, requestCode: Int): PendingIntent {

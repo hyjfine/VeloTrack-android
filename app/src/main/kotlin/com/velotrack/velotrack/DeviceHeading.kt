@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.SystemClock
 import android.view.Surface
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
@@ -17,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlin.math.abs
 
 /**
  * Reads device heading from the rotation-vector sensor.
@@ -43,6 +45,8 @@ fun rememberDeviceHeadingDegrees(enabled: Boolean): Float? {
         val rotationMatrix = FloatArray(9)
         val remappedMatrix = FloatArray(9)
         val orientation = FloatArray(3)
+        var lastEmittedAtMs = 0L
+        var lastEmittedHeading: Float? = null
 
         fun displayRotation(): Int {
             @Suppress("DEPRECATION")
@@ -83,7 +87,15 @@ fun rememberDeviceHeadingDegrees(enabled: Boolean): Float? {
             val azimuthDeg = Math.toDegrees(azimuthRad.toDouble()).toFloat()
             // Sensor azimuth and map marker rotation use opposite rotation directions on our marker.
             // The marker artwork's forward zero also needs a 180° offset. Route-bearing fallback stays unchanged.
-            headingDegrees = normalizeDegrees(180f - azimuthDeg)
+            val next = normalizeDegrees(180f - azimuthDeg)
+            val now = SystemClock.elapsedRealtime()
+            val previous = lastEmittedHeading
+            val delta = previous?.let { circularDeltaDegrees(it, next) } ?: Float.MAX_VALUE
+            if (now - lastEmittedAtMs >= HEADING_MIN_INTERVAL_MS && delta >= HEADING_MIN_DELTA_DEG) {
+                headingDegrees = next
+                lastEmittedHeading = next
+                lastEmittedAtMs = now
+            }
         }
 
         val listener = object : SensorEventListener {
@@ -92,7 +104,7 @@ fun rememberDeviceHeadingDegrees(enabled: Boolean): Float? {
         }
 
         fun register() {
-            sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
         }
 
         fun unregister() {
@@ -123,3 +135,10 @@ fun rememberDeviceHeadingDegrees(enabled: Boolean): Float? {
 
 private fun normalizeDegrees(value: Float): Float = ((value % 360f) + 360f) % 360f
 
+private fun circularDeltaDegrees(a: Float, b: Float): Float {
+    val raw = abs(a - b) % 360f
+    return minOf(raw, 360f - raw)
+}
+
+private const val HEADING_MIN_INTERVAL_MS = 150L
+private const val HEADING_MIN_DELTA_DEG = 3f

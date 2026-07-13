@@ -30,4 +30,14 @@ AMAP_API_KEY=...
 
 ## 可选：Gemini
 
-在 `gradle.properties` 中增加 `GEMINI_API_KEY=...` 供 `BuildConfig` 使用。
+Debug 开发可在 `local.properties` 中增加 `GEMINI_API_KEY=...`。Release 不会把该密钥打进 APK，
+必须配置 `AI_PROXY_URL=https://...`，代理接收 `{requestId, prompt}` 并返回 `{text}`。
+
+正式签名通过 CI Secret 或未提交的 `local.properties` 配置：
+
+```properties
+RELEASE_STORE_FILE=/absolute/path/to/release.jks
+RELEASE_STORE_PASSWORD=...
+RELEASE_KEY_ALIAS=...
+RELEASE_KEY_PASSWORD=...
+```

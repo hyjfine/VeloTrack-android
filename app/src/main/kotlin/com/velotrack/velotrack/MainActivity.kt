@@ -3,6 +3,8 @@ package com.velotrack.velotrack
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -16,8 +18,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velotrack.velotrack.db.AppDatabase
 import com.velotrack.velotrack.recording.RecordingNotificationHelper
@@ -53,10 +59,11 @@ class MainActivity : ComponentActivity() {
     private var pendingNotificationAfterPermission = false
 
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             syncLocationPrecision()
-            val hasLocation = permissions.values.any { it }
-            if (startCountdownAfterPermission && hasLocation &&
+            val hasFineLocation = hasFineLocationPermission()
+            viewModel.setLocationPermissionDenied(!hasFineLocation)
+            if (startCountdownAfterPermission && hasFineLocation &&
                 viewModel.uiState.value.view == AppView.RECORDING &&
                 !viewModel.uiState.value.isRecording
             ) {
@@ -65,7 +72,7 @@ class MainActivity : ComponentActivity() {
             startCountdownAfterPermission = false
             if (pendingNotificationAfterPermission) {
                 pendingNotificationAfterPermission = false
-                requestNotificationPermissionIfNeeded()
+                if (hasFineLocation) requestNotificationPermissionIfNeeded()
             }
             syncPrewarmLocationSubscription()
         }
@@ -96,40 +103,54 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             VeloTheme {
-                val state by viewModel.uiState.collectAsStateWithLifecycle()
-                LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
-                    syncPrewarmLocationSubscription()
-                    syncKeepScreenOn()
+                var privacyAccepted by remember {
+                    mutableStateOf((application as VeloApp).isPrivacyAccepted())
                 }
-                VeloMainScreen(
-                    state = state,
-                    provider = mapProvider,
-                    debugPermissions = locationPermissionSnapshot(),
-                    onStartRecording = { requestStartCountdown() },
-                    onCancelStartCountdown = { viewModel.cancelStartCountdown() },
-                    onTogglePause = { viewModel.togglePause() },
-                    onStopRecording = { viewModel.stopRecording() },
-                    onBeginHold = { viewModel.beginHold() },
-                    onEndHold = { viewModel.endHold() },
-                    onSetView = {
-                        viewModel.setView(it)
-                        if (it == AppView.HISTORY) viewModel.loadHistory()
-                    },
-                    onOpenRide = { viewModel.openRide(it) },
-                    onRequestDelete = { viewModel.requestDeleteRide(it) },
-                    onConfirmDelete = { viewModel.confirmDeleteRide() },
-                    onCancelDelete = { viewModel.cancelDeleteRide() },
-                    onAnalyze = { viewModel.runAnalysis() },
-                    onBackDetail = { viewModel.backFromDetail() },
-                    onToggleDebugLog = { viewModel.toggleDebugLog() },
-                    onSaveDebugLog = { viewModel.saveDebugLog() },
-                )
+                if (!privacyAccepted) {
+                    PrivacyConsentScreen(
+                        onAgree = {
+                            (application as VeloApp).acceptPrivacy()
+                            privacyAccepted = true
+                        },
+                        onExit = { finish() },
+                    )
+                } else {
+                    val state by viewModel.uiState.collectAsStateWithLifecycle()
+                    LaunchedEffect(state.isRecording, state.startCountdownSeconds) {
+                        syncPrewarmLocationSubscription()
+                        syncKeepScreenOn()
+                    }
+                    VeloMainScreen(
+                        state = state,
+                        provider = mapProvider,
+                        debugPermissions = locationPermissionSnapshot(),
+                        onStartRecording = { requestStartCountdown() },
+                        onCancelStartCountdown = { viewModel.cancelStartCountdown() },
+                        onTogglePause = { viewModel.togglePause() },
+                        onStopRecording = { viewModel.stopRecording() },
+                        onBeginHold = { viewModel.beginHold() },
+                        onEndHold = { viewModel.endHold() },
+                        onSetView = {
+                            viewModel.setView(it)
+                            if (it == AppView.HISTORY) viewModel.loadHistory()
+                        },
+                        onOpenRide = { viewModel.openRide(it) },
+                        onRequestDelete = { viewModel.requestDeleteRide(it) },
+                        onConfirmDelete = { viewModel.confirmDeleteRide() },
+                        onCancelDelete = { viewModel.cancelDeleteRide() },
+                        onAnalyze = { viewModel.runAnalysis() },
+                        onBackDetail = { viewModel.backFromDetail() },
+                        onToggleDebugLog = { viewModel.toggleDebugLog() },
+                        onSaveDebugLog = { viewModel.saveDebugLog() },
+                    )
+                }
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
+        syncLocationPrecision()
         enableAdaptiveHighRefreshRate()
         syncKeepScreenOn()
         syncPrewarmLocationSubscription()
@@ -182,9 +203,6 @@ class MainActivity : ComponentActivity() {
         viewModel.setLocationPrecision(hasFineLocationPermission())
     }
 
-    private fun hasLocationPermission(): Boolean =
-        hasFineLocationPermission() || hasCoarseLocationPermission()
-
     private fun locationPermissionSnapshot(): LocationPermissionSnapshot =
         LocationPermissionSnapshot(
             fine = hasFineLocationPermission(),
@@ -206,12 +224,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestLocationPermissions() {
+        getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE)
+            .edit { putBoolean(KEY_FINE_LOCATION_REQUESTED, true) }
         permissionLauncher.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
             ),
         )
+    }
+
+    private fun requestFineLocationOrOpenSettings() {
+        val requestedBefore = getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE)
+            .getBoolean(KEY_FINE_LOCATION_REQUESTED, false)
+        if (requestedBefore &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_FINE_LOCATION)
+        ) {
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ),
+            )
+        } else {
+            requestLocationPermissions()
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -223,10 +260,11 @@ class MainActivity : ComponentActivity() {
     private fun requestStartCountdown() {
         val state = viewModel.uiState.value
         if (state.isRecording || state.startCountdownSeconds != null) return
-        if (!hasLocationPermission()) {
+        if (!hasFineLocationPermission()) {
+            viewModel.setLocationPermissionDenied(true)
             startCountdownAfterPermission = true
             pendingNotificationAfterPermission = true
-            requestLocationPermissions()
+            requestFineLocationOrOpenSettings()
             return
         }
         if (!hasNotificationPermission()) {
@@ -251,14 +289,19 @@ class MainActivity : ComponentActivity() {
     private fun syncPrewarmLocationSubscription() {
         val state = viewModel.uiState.value
         val shouldPrewarm = state.startCountdownSeconds != null && !state.isRecording
-        if (shouldPrewarm && !hasLocationPermission()) {
+        if (shouldPrewarm && !hasFineLocationPermission()) {
             requestLocationPermissions()
             return
         }
-        if (shouldPrewarm && hasLocationPermission()) {
-            prewarmLocationTracker.start(precise = hasFineLocationPermission())
+        if (shouldPrewarm && hasFineLocationPermission()) {
+            prewarmLocationTracker.start(precise = true)
         } else {
             prewarmLocationTracker.stop()
         }
+    }
+
+    private companion object {
+        const val PERMISSION_PREFS = "permission_state"
+        const val KEY_FINE_LOCATION_REQUESTED = "fine_location_requested"
     }
 }

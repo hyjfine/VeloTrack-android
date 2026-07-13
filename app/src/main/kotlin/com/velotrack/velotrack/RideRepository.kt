@@ -8,7 +8,8 @@ import com.velotrack.velotrack.speed.TrackDataFilter
 class RideRepository(
     private val dao: RideDao,
 ) {
-    fun listRides(): List<Ride> = dao.getAllBlocking().map(::entityToRide)
+    /** 历史列表只读取 rides 摘要，不触发每条骑行的 gps_points 查询。 */
+    fun listRides(): List<Ride> = dao.getAllBlocking().map(::entityToSummaryRide)
 
     fun getRide(id: String): Ride? = dao.getByIdBlocking(id)?.let(::entityToRide)
 
@@ -22,6 +23,7 @@ class RideRepository(
                 totalDistance = ride.totalDistance,
                 avgSpeed = ride.avgSpeed,
                 maxSpeed = ride.maxSpeed,
+                movingDurationSec = ride.movingDurationSec,
             ),
             ride.points.mapIndexed { index, point ->
                 pointToEntity(ride.id, index, point)
@@ -43,6 +45,7 @@ class RideRepository(
                 totalDistance = 0.0,
                 avgSpeed = 0.0,
                 maxSpeed = 0.0,
+                movingDurationSec = 0.0,
             ),
         )
     }
@@ -67,6 +70,7 @@ class RideRepository(
                 totalDistance = ride.totalDistance,
                 avgSpeed = ride.avgSpeed,
                 maxSpeed = ride.maxSpeed,
+                movingDurationSec = ride.movingDurationSec,
             ),
             ride.points.mapIndexed { index, point -> pointToEntity(ride.id, index, point) },
         )
@@ -96,7 +100,26 @@ class RideRepository(
             totalDistance = stats?.totalDistanceM ?: entity.totalDistance,
             avgSpeed = stats?.avgSpeedMps ?: entity.avgSpeed,
             maxSpeed = stats?.maxSpeedMps ?: entity.maxSpeed,
-            movingDurationSec = stats?.movingDurationSec?.takeIf { it > 0.0 } ?: wallDurationSec,
+            movingDurationSec = stats?.movingDurationSec?.takeIf { it > 0.0 }
+                ?: entity.movingDurationSec.takeIf { it > 0.0 }
+                ?: wallDurationSec,
+        )
+    }
+
+    private fun entityToSummaryRide(entity: RideEntity): Ride {
+        val wallDurationSec = entity.endTime?.let { end ->
+            ((end - entity.startTime).coerceAtLeast(0L) / 1000.0)
+        } ?: 0.0
+        return Ride(
+            id = entity.id,
+            title = entity.title,
+            startTime = entity.startTime,
+            endTime = entity.endTime,
+            points = emptyList(),
+            totalDistance = entity.totalDistance,
+            avgSpeed = entity.avgSpeed,
+            maxSpeed = entity.maxSpeed,
+            movingDurationSec = entity.movingDurationSec.takeIf { it > 0.0 } ?: wallDurationSec,
         )
     }
 

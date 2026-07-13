@@ -1,16 +1,27 @@
 package com.velotrack.velotrack.recording
 
+import androidx.compose.runtime.Immutable
 import com.velotrack.velotrack.GnssSatelliteSnapshot
 import com.velotrack.velotrack.GpsPoint
 
 /** 前台录制会话快照，由 [RecordingSessionManager] 发布。 */
+@Immutable
 data class RecordingSessionState(
+    val isRestoring: Boolean = false,
     val isRecording: Boolean = false,
     val isPaused: Boolean = false,
+    /** 已停止采集，正在等待最终事务落库。 */
+    val isSaving: Boolean = false,
     val rideId: String? = null,
     val recordingStartAt: Long = 0L,
     val elapsedMs: Long = 0L,
     val livePoints: List<GpsPoint> = emptyList(),
+    /** 已增量剔除尖峰的显示轨迹，避免 UI 每帧扫描完整骑行。 */
+    val displayPoints: List<GpsPoint> = emptyList(),
+    /** 有上限的地图绘制点；完整原始点仍保留在 [livePoints] 并写入 Room。 */
+    val mapPoints: List<GpsPoint> = emptyList(),
+    val displayDistanceM: Double = 0.0,
+    val spikePointIndices: Set<Int> = emptySet(),
     val currentSpeedMps: Double = 0.0,
     val mapCenterLat: Double = 31.2304,
     val mapCenterLng: Double = 121.4737,
@@ -44,4 +55,6 @@ data class RecordingSessionState(
     /** 本帧参与导数计算的段数，debug 用。 */
     val lastSegmentCount: Int? = null,
     val gnss: GnssSatelliteSnapshot? = null,
+    /** 录制持久化错误；保留内存会话，允许用户再次长按重试保存。 */
+    val persistenceError: String? = null,
 )

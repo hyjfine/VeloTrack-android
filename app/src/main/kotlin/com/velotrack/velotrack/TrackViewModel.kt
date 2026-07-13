@@ -3,6 +3,7 @@ package com.velotrack.velotrack
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -22,10 +23,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+@Immutable
 data class TrackUiState(
     val view: AppView = AppView.RECORDING,
+    val isRestoringRecording: Boolean = false,
     val isRecording: Boolean = false,
     val isPaused: Boolean = false,
+    val isSavingRide: Boolean = false,
+    val locationPermissionDenied: Boolean = false,
     val startCountdownSeconds: Int? = null,
     val isHolding: Boolean = false,
     val holdVersion: Int = 0,
@@ -37,14 +42,21 @@ data class TrackUiState(
     val mapCenterLat: Double = 31.2304,
     val mapCenterLng: Double = 121.4737,
     val livePoints: List<GpsPoint> = emptyList(),
+    val displayPoints: List<GpsPoint> = emptyList(),
+    val mapPoints: List<GpsPoint> = emptyList(),
+    val liveDistanceM: Double = 0.0,
+    val liveSpikePointCount: Int = 0,
     val currentSpeedMps: Double = 0.0,
     val currentAltitude: Double? = null,
     val history: List<Ride> = emptyList(),
     val selectedRide: Ride? = null,
     val pendingDeleteRideId: String? = null,
+    val isDeletingRide: Boolean = false,
+    val deleteRideError: String? = null,
     val aiAnalysis: String? = null,
     val isAnalysing: Boolean = false,
     val errorMessage: String? = null,
+    val recordingErrorMessage: String? = null,
     val lastLocationAtMs: Long? = null,
     val lastLocationAccuracyM: Double? = null,
     val lastLocationCountedInTrack: Boolean = false,
@@ -75,6 +87,10 @@ class TrackViewModel(
     val uiState: StateFlow<TrackUiState> = _uiState
 
     private var startCountdownJob: Job? = null
+    private var analysisJob: Job? = null
+    private var detailLoadJob: Job? = null
+    private var activeAnalysisRequestId: String? = null
+    private val analysisCache = mutableMapOf<String, String>()
     var hasFineLocation: Boolean = true
         private set
 
@@ -91,6 +107,13 @@ class TrackViewModel(
 
     fun setLocationPrecision(fine: Boolean) {
         hasFineLocation = fine
+        if (fine) {
+            _uiState.update { it.copy(locationPermissionDenied = false) }
+        }
+    }
+
+    fun setLocationPermissionDenied(denied: Boolean) {
+        _uiState.update { it.copy(locationPermissionDenied = denied) }
     }
 
     /** 从后台回到前台时强制同步录制会话到 UI（地图轨迹等）。 */
@@ -109,7 +132,7 @@ class TrackViewModel(
 
     fun beginStartCountdown() {
         val s = _uiState.value
-        if (s.isRecording || s.startCountdownSeconds != null) return
+        if (s.isRecording || s.isRestoringRecording || s.startCountdownSeconds != null) return
         startCountdownJob?.cancel()
         startCountdownJob = viewModelScope.launch {
             for (seconds in START_COUNTDOWN_SECONDS downTo 1) {
@@ -285,34 +308,71 @@ class TrackViewModel(
 
     fun openRide(ride: Ride) {
         cancelStartCountdown()
-        _uiState.update { it.copy(selectedRide = ride, view = AppView.DETAIL, aiAnalysis = null) }
+        cancelAnalysis()
+        detailLoadJob?.cancel()
+        detailLoadJob = viewModelScope.launch(Dispatchers.IO) {
+            val fullRide = repo.getRide(ride.id) ?: return@launch
+            _uiState.update {
+                it.copy(
+                    selectedRide = fullRide,
+                    view = AppView.DETAIL,
+                    aiAnalysis = analysisCache[fullRide.id],
+                    isAnalysing = false,
+                    errorMessage = null,
+                )
+            }
+        }
     }
 
     fun backFromDetail() {
         cancelStartCountdown()
-        _uiState.update { it.copy(view = AppView.HISTORY, selectedRide = null, aiAnalysis = null) }
+        detailLoadJob?.cancel()
+        detailLoadJob = null
+        cancelAnalysis()
+        _uiState.update {
+            it.copy(view = AppView.HISTORY, selectedRide = null, aiAnalysis = null, isAnalysing = false)
+        }
     }
 
     fun requestDeleteRide(id: String) {
-        _uiState.update { it.copy(pendingDeleteRideId = id) }
+        _uiState.update { it.copy(pendingDeleteRideId = id, deleteRideError = null) }
     }
 
     fun cancelDeleteRide() {
-        _uiState.update { it.copy(pendingDeleteRideId = null) }
+        _uiState.update { it.copy(pendingDeleteRideId = null, deleteRideError = null) }
     }
 
     fun confirmDeleteRide() {
         val id = _uiState.value.pendingDeleteRideId ?: return
+        if (_uiState.value.isDeletingRide) return
+        _uiState.update { it.copy(isDeletingRide = true, deleteRideError = null) }
         viewModelScope.launch(Dispatchers.IO) {
-            repo.deleteRide(id)
-            val rides = repo.listRides()
-            _uiState.update { it.copy(history = rides, pendingDeleteRideId = null) }
+            runCatching {
+                repo.deleteRide(id)
+                repo.listRides()
+            }.onSuccess { rides ->
+                _uiState.update {
+                    it.copy(
+                        history = rides,
+                        pendingDeleteRideId = null,
+                        isDeletingRide = false,
+                        deleteRideError = null,
+                    )
+                }
+            }.onFailure { error ->
+                Log.e("VeloDB", "delete ride failed id=$id", error)
+                _uiState.update {
+                    it.copy(isDeletingRide = false, deleteRideError = "删除失败，请重试")
+                }
+            }
         }
     }
 
     fun runAnalysis() {
+        if (_uiState.value.isAnalysing) return
         val ride = _uiState.value.selectedRide ?: return
         val requestId = UUID.randomUUID().toString().take(8)
+        activeAnalysisRequestId = requestId
         val prompt = buildPrompt(ride)
         Log.d(
             AI_LOG_TAG,
@@ -322,16 +382,24 @@ class TrackViewModel(
                 "promptChars=${prompt.length}",
         )
         _uiState.update { it.copy(isAnalysing = true, aiAnalysis = null, errorMessage = null) }
-        viewModelScope.launch(Dispatchers.IO) {
+        analysisJob = viewModelScope.launch(Dispatchers.IO) {
             val startedAt = System.currentTimeMillis()
             runCatching {
-                GeminiClient.generateContent(BuildConfig.GEMINI_API_KEY, prompt, requestId)
+                GeminiClient.generateContent(
+                    apiKey = BuildConfig.GEMINI_API_KEY,
+                    prompt = prompt,
+                    requestId = requestId,
+                    proxyUrl = BuildConfig.AI_PROXY_URL,
+                )
             }.onSuccess { text ->
                 Log.d(
                     AI_LOG_TAG,
                     "analysis success requestId=$requestId elapsedMs=${System.currentTimeMillis() - startedAt} responseChars=${text.length}",
                 )
-                _uiState.update { it.copy(isAnalysing = false, aiAnalysis = text) }
+                if (activeAnalysisRequestId == requestId && _uiState.value.selectedRide?.id == ride.id) {
+                    analysisCache[ride.id] = text
+                    _uiState.update { it.copy(isAnalysing = false, aiAnalysis = text) }
+                }
             }.onFailure { error ->
                 Log.w(
                     AI_LOG_TAG,
@@ -340,23 +408,37 @@ class TrackViewModel(
                         "type=${error::class.java.simpleName}",
                     error,
                 )
-                _uiState.update {
-                    it.copy(
-                        isAnalysing = false,
-                        errorMessage = analysisErrorMessage(error),
-                    )
+                if (activeAnalysisRequestId == requestId && _uiState.value.selectedRide?.id == ride.id) {
+                    _uiState.update {
+                        it.copy(
+                            isAnalysing = false,
+                            errorMessage = analysisErrorMessage(error),
+                        )
+                    }
                 }
             }
         }
     }
 
+    private fun cancelAnalysis() {
+        activeAnalysisRequestId = null
+        analysisJob?.cancel()
+        analysisJob = null
+    }
+
     private fun mergeRecordingSession(session: RecordingSessionState) {
         _uiState.update { ui ->
             ui.copy(
+                isRestoringRecording = session.isRestoring,
                 isRecording = session.isRecording,
                 isPaused = session.isPaused,
+                isSavingRide = session.isSaving,
                 elapsedMs = session.elapsedMs,
                 livePoints = session.livePoints,
+                displayPoints = session.displayPoints,
+                mapPoints = session.mapPoints,
+                liveDistanceM = session.displayDistanceM,
+                liveSpikePointCount = session.spikePointIndices.size,
                 currentSpeedMps = session.currentSpeedMps,
                 mapCenterLat = session.mapCenterLat,
                 mapCenterLng = session.mapCenterLng,
@@ -379,6 +461,7 @@ class TrackViewModel(
                 lastSegmentDtMs = session.lastSegmentDtMs,
                 lastSegmentCount = session.lastSegmentCount,
                 gnss = session.gnss,
+                recordingErrorMessage = session.persistenceError,
             )
         }
     }

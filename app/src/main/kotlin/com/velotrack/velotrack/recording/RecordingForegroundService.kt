@@ -3,7 +3,6 @@ package com.velotrack.velotrack.recording
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import com.velotrack.velotrack.VeloApp
 
@@ -14,6 +13,11 @@ class RecordingForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        manager.setServiceRunning(true)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START, ACTION_UPDATE -> promoteForeground()
@@ -22,11 +26,24 @@ class RecordingForegroundService : Service() {
                 promoteForeground()
             }
             ACTION_RESUME -> {
-                manager.resume(hasFineLocation = true)
+                manager.resumeWithCurrentPermission()
                 promoteForeground()
             }
             ACTION_STOP -> {
-                manager.stopRecording { stopSelf() }
+                if (manager.attachService().isSaving) {
+                    promoteForeground()
+                } else {
+                    manager.stopRecording { ride ->
+                        if (ride != null) stopSelf() else promoteForeground()
+                    }
+                }
+            }
+            null -> {
+                // START_STICKY 进程重建会收到 null Intent；必须立即恢复前台，并异步刷新草稿状态。
+                promoteForeground()
+                manager.recoverActiveDraft { recovered ->
+                    if (recovered) promoteForeground() else stopSelf(startId)
+                }
             }
         }
         return START_STICKY
@@ -34,19 +51,15 @@ class RecordingForegroundService : Service() {
 
     private fun promoteForeground() {
         val notification = RecordingNotificationHelper.buildNotification(this, manager.attachService())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                RecordingNotificationHelper.NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            startForeground(RecordingNotificationHelper.NOTIFICATION_ID, notification)
-        }
+        startForeground(
+            RecordingNotificationHelper.NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+        )
     }
 
     override fun onDestroy() {
+        manager.setServiceRunning(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }

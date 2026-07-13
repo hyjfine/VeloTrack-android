@@ -39,8 +39,7 @@ class LocationTracker(
     private var platformFallbackStarted = false
     private var gnssCallbackRegistered = false
 
-    private val gnssCallback: GnssStatus.Callback? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+    private val gnssCallback: GnssStatus.Callback =
             object : GnssStatus.Callback() {
                 override fun onSatelliteStatusChanged(status: GnssStatus) {
                     var visible = 0
@@ -64,6 +63,7 @@ class LocationTracker(
                             GnssStatus.CONSTELLATION_GPS -> if (used) gpsInUse++
                             GnssStatus.CONSTELLATION_GLONASS -> if (used) glonassInUse++
                             GnssStatus.CONSTELLATION_GALILEO -> if (used) galileoInUse++
+                            else -> Unit
                         }
                     }
                     onGnssStatus(
@@ -79,19 +79,16 @@ class LocationTracker(
                     )
                 }
             }
-        } else {
-            null
-        }
 
     private fun gmsRequest(precise: Boolean, recordingMode: Boolean): LocationRequest {
-        val intervalMs = if (recordingMode) 800L else 1000L
-        val minIntervalMs = if (recordingMode) 500L else 800L
+        val intervalMs = if (recordingMode) 1_200L else 2_000L
+        val minIntervalMs = if (recordingMode) 900L else 1_500L
         return LocationRequest.Builder(
             if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY,
             intervalMs,
         )
             .setMinUpdateIntervalMillis(minIntervalMs)
-            .setMinUpdateDistanceMeters(0f)
+            .setMinUpdateDistanceMeters(if (recordingMode) 1f else 3f)
             .setWaitForAccurateLocation(recordingMode)
             .build()
     }
@@ -142,18 +139,29 @@ class LocationTracker(
         if (running) stop()
         runningPrecise = precise
         onDebugEvent("start provider=$provider precise=$precise recording=$recordingMode")
-        emitRecentKnownLocation()
-        registerGnssCallbackIfNeeded()
-        when (provider) {
-            MapProvider.AMAP -> startAmapLocation(precise, recordingMode)
-            MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise, recordingMode)
+        try {
+            emitRecentKnownLocation()
+            registerGnssCallbackIfNeeded()
+            when (provider) {
+                MapProvider.AMAP -> startAmapLocation(precise, recordingMode)
+                MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise, recordingMode)
+            }
+            running = true
+        } catch (error: SecurityException) {
+            val message = "Location permission unavailable: ${error.message.orEmpty()}"
+            Log.w(TAG_LOC, message)
+            onDebugEvent(message)
+            stopInternal()
         }
-        running = true
     }
 
     fun stop() {
         if (!running) return
         onDebugEvent("stop provider=$provider")
+        stopInternal()
+    }
+
+    private fun stopInternal() {
         currentLocationToken?.cancel()
         currentLocationToken = null
         unregisterGnssCallback()
@@ -227,7 +235,7 @@ class LocationTracker(
             } else {
                 AMapLocationClientOption.AMapLocationMode.Battery_Saving
             }
-            interval = if (recordingMode) 800L else 1000L
+            interval = if (recordingMode) 1_200L else 2_000L
             isOnceLocation = false
             isOnceLocationLatest = false
             isNeedAddress = false
@@ -254,8 +262,8 @@ class LocationTracker(
 
     @SuppressLint("MissingPermission")
     private fun startPlatformLocation(precise: Boolean, recordingMode: Boolean = false) {
-        val minTimeMs = if (recordingMode) 800L else 1000L
-        val minDistanceM = if (recordingMode) 0f else 1f
+        val minTimeMs = if (recordingMode) 1_200L else 2_000L
+        val minDistanceM = if (recordingMode) 1f else 3f
         val mainLooper = Looper.getMainLooper()
         if (precise && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             locationManager.requestLocationUpdates(
@@ -311,14 +319,13 @@ class LocationTracker(
         if (hasSpeed()) String.format(java.util.Locale.US, "%.1fmps", speed) else "none"
 
     private fun Location.speedAccuracyText(): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return "n/a"
         return if (hasSpeedAccuracy()) String.format(java.util.Locale.US, "%.2fmps", speedAccuracyMetersPerSecond) else "none"
     }
 
     private fun Location.trustworthyGnssSpeed(): Boolean {
         if (!hasSpeed() || speed <= 0f) return false
         if (!hasAccuracy() || accuracy > 15f) return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && hasSpeedAccuracy()) {
+        if (hasSpeedAccuracy()) {
             if (speedAccuracyMetersPerSecond > 2.5f) return false
         }
         // GMS FusedLocationProvider 回调时 provider 通常是 "fused"；仅按 GPS_PROVIDER 判定会漏掉所有 GMS 帧。
@@ -335,7 +342,6 @@ class LocationTracker(
     }
 
     private fun Location.speedAccuracyOrNull(): Double? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
         return if (hasSpeedAccuracy()) speedAccuracyMetersPerSecond.toDouble() else null
     }
 
@@ -392,8 +398,7 @@ class LocationTracker(
     @SuppressLint("MissingPermission")
     private fun registerGnssCallbackIfNeeded() {
         if (gnssCallbackRegistered) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
-        val callback = gnssCallback ?: return
+        val callback = gnssCallback
         runCatching {
             locationManager.registerGnssStatusCallback(callback, android.os.Handler(Looper.getMainLooper()))
             gnssCallbackRegistered = true
@@ -404,8 +409,7 @@ class LocationTracker(
 
     private fun unregisterGnssCallback() {
         if (!gnssCallbackRegistered) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
-        val callback = gnssCallback ?: return
+        val callback = gnssCallback
         runCatching { locationManager.unregisterGnssStatusCallback(callback) }
         gnssCallbackRegistered = false
     }
@@ -425,4 +429,3 @@ data class GnssSatelliteSnapshot(
     val glonassInUse: Int,
     val galileoInUse: Int,
 )
-

@@ -38,10 +38,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.velotrack.velotrack.speed.TrackDataFilter
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
 import com.velotrack.velotrack.ui.rememberTapFeedback
@@ -67,13 +70,10 @@ fun RecordingScreen(
 ) {
     val bottomPad = (VeloDimens.gaugeBottom + navBottom.value).dp
     val deviceHeadingDeg = rememberDeviceHeadingDegrees(enabled = state.isRecording)
-    val trackDisplay = remember(state.livePoints) {
-        TrackDataFilter.displaySnapshot(state.livePoints)
-    }
     Box(Modifier.fillMaxSize()) {
         MapPane(
             provider = provider,
-            points = trackDisplay.points,
+            points = state.mapPoints,
             modifier = Modifier.fillMaxSize(),
             followLatestPosition = true,
             mapZoom = DEFAULT_RECORDING_MAP_ZOOM,
@@ -94,6 +94,13 @@ fun RecordingScreen(
         ) {
             HudStatusCard(
                 title = when {
+                    state.isRestoringRecording -> "RESTORING"
+                    state.isSavingRide -> "SAVING"
+                    state.recordingErrorMessage?.contains("保存失败") == true -> "SAVE FAILED"
+                    state.recordingErrorMessage?.contains("未完成骑行") == true -> "RIDE RESTORED"
+                    state.recordingErrorMessage?.contains("权限") == true -> "LOCATION NEEDED"
+                    state.recordingErrorMessage != null -> "SERVICE ERROR"
+                    state.locationPermissionDenied -> "LOCATION NEEDED"
                     state.startCountdownSeconds != null -> "READY"
                     state.isRecording && state.signalLost -> "SIGNAL LOST"
                     state.isRecording -> "TRACKING"
@@ -104,7 +111,7 @@ fun RecordingScreen(
             )
             HudDistanceCard(
                 distanceText = if (state.isRecording || state.livePoints.isNotEmpty()) {
-                    formatDistanceMeters(trackDisplay.totalDistanceM)
+                    formatDistanceMeters(state.liveDistanceM)
                 } else {
                     "0.00"
                 },
@@ -114,7 +121,6 @@ fun RecordingScreen(
         if (BuildConfig.DEBUG) {
             DebugStatusPanel(
                 state = state,
-                trackDisplay = trackDisplay,
                 provider = provider,
                 permissions = debugPermissions,
                 onToggleDebugLog = onToggleDebugLog,
@@ -146,7 +152,6 @@ fun RecordingScreen(
 @Composable
 private fun DebugStatusPanel(
     state: TrackUiState,
-    trackDisplay: TrackDataFilter.DisplaySnapshot,
     provider: MapProvider,
     permissions: LocationPermissionSnapshot,
     onToggleDebugLog: () -> Unit,
@@ -181,7 +186,7 @@ private fun DebugStatusPanel(
                 DebugLine("countdown", state.startCountdownSeconds?.toString() ?: "-")
                 DebugLine("permission", "any=${permissions.any} fine=${permissions.fine} coarse=${permissions.coarse}")
                 DebugLine("center", "${formatDebugCoord(state.mapCenterLat)}, ${formatDebugCoord(state.mapCenterLng)}")
-                DebugLine("points", "${state.livePoints.size} raw / ${trackDisplay.points.size} display spikes=${trackDisplay.spikePointCount}")
+                DebugLine("points", "${state.livePoints.size} raw / ${state.displayPoints.size} display spikes=${state.liveSpikePointCount}")
                 DebugLine("last loc", state.lastLocationAtMs?.let { "${formatLocationAgeMs(it)} ago" } ?: "none")
                 DebugLine("accuracy", state.lastLocationAccuracyM?.let { "${it.toInt()}m" } ?: "unknown")
                 DebugLine("track point", state.lastLocationCountedInTrack.toString())
@@ -448,9 +453,27 @@ private fun MainGaugeCard(
                         .size(72.dp)
                         .clip(CircleShape)
                         .background(btnBg)
-                        .pointerInput(state.isRecording, isCountingDown) {
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = when {
+                                state.isSavingRide -> "正在保存骑行"
+                                isCountingDown -> "取消开始录制倒计时"
+                                !state.isRecording -> "开始录制"
+                                state.isPaused -> "继续录制，长按停止"
+                                else -> "暂停录制，长按停止"
+                            }
+                        }
+                        .pointerInput(
+                            state.isRecording,
+                            isCountingDown,
+                            state.isSavingRide,
+                            state.isRestoringRecording,
+                        ) {
                             detectTapGestures(
                                 onPress = {
+                                    if (state.isSavingRide || state.isRestoringRecording) {
+                                        return@detectTapGestures
+                                    }
                                     if (isCountingDown) {
                                         tapFeedback()
                                         onCancelStartCountdown()
@@ -503,11 +526,21 @@ private fun MainGaugeCard(
                 }
                 if (state.isRecording) {
                     Text(
-                        "HOLD TO STOP",
-                        style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.mutedText.copy(alpha = 0.3f)),
+                        when {
+                            state.isSavingRide -> "SAVING..."
+                            state.recordingErrorMessage != null -> state.recordingErrorMessage
+                            else -> "HOLD TO STOP"
+                        },
+                        style = tabularTextStyle(
+                            if (state.recordingErrorMessage != null) 7.sp else 8.sp,
+                            FontWeight.Bold,
+                            if (state.recordingErrorMessage != null) VeloColors.danger else VeloColors.mutedText.copy(alpha = 0.3f),
+                        ),
+                        maxLines = 2,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .offset(y = 24.dp),
+                            .offset(y = 28.dp)
+                            .widthIn(max = 150.dp),
                     )
                 }
             }
@@ -539,4 +572,3 @@ private fun MainGaugeCard(
         }
     }
 }
-

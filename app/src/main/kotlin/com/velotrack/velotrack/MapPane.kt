@@ -7,12 +7,14 @@ import android.graphics.Path
 import android.os.Bundle
 import android.view.MotionEvent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -25,6 +27,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -300,6 +305,23 @@ fun MapPane(
     fitRouteBounds: Boolean = false,
     onMapTouchingChanged: (Boolean) -> Unit = {},
 ) {
+    val configured = when (provider) {
+        MapProvider.AMAP -> BuildConfig.AMAP_API_KEY.isNotBlank()
+        MapProvider.GOOGLE_MAPS -> BuildConfig.GOOGLE_MAPS_API_KEY.isNotBlank()
+    }
+    if (!configured) {
+        Box(
+            modifier = modifier.background(if (darkMode) Color(0xFF24262B) else VeloColors.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "地图服务未配置",
+                color = if (darkMode) Color.White.copy(alpha = 0.7f) else VeloColors.mutedText,
+                fontSize = 13.sp,
+            )
+        }
+        return
+    }
     when (provider) {
         MapProvider.AMAP -> AmapPane(
             points = points,
@@ -408,8 +430,8 @@ private fun GooglePane(
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
     var isMapLoaded by remember { mutableStateOf(false) }
     var hasUserAdjustedCamera by remember { mutableStateOf(false) }
-    var lastUserGestureAt by remember { mutableStateOf(0L) }
-    var lastCameraMoveAt by remember { mutableStateOf(0L) }
+    var lastUserGestureAt by remember { mutableLongStateOf(0L) }
+    var lastCameraMoveAt by remember { mutableLongStateOf(0L) }
     var lastCameraLatLng by remember { mutableStateOf<GoogleLatLng?>(null) }
     fun markUserGesture() {
         if (followLatestPositionState) {
@@ -584,8 +606,8 @@ private fun AmapPane(
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
     var hasUserAdjustedCamera by remember { mutableStateOf(false) }
-    var lastUserGestureAt by remember { mutableStateOf(0L) }
-    var lastCameraMoveAt by remember { mutableStateOf(0L) }
+    var lastUserGestureAt by remember { mutableLongStateOf(0L) }
+    var lastCameraMoveAt by remember { mutableLongStateOf(0L) }
     var lastCameraLatLng by remember { mutableStateOf<AmapLatLng?>(null) }
     val markerDensity = context.resources.displayMetrics.density
     val startMarkerIcon = remember(markerDensity) {

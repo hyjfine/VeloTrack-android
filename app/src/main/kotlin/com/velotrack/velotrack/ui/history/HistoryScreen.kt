@@ -60,7 +60,7 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun HistoryScreen(
-    state: TrackUiState,
+    rides: List<Ride>,
     navBottom: androidx.compose.ui.unit.Dp,
     onOpenRide: (Ride) -> Unit,
     onRequestDelete: (String) -> Unit,
@@ -80,7 +80,7 @@ fun HistoryScreen(
                     style = tabularTextStyle(36.sp, FontWeight.Bold, VeloColors.foreground, (-0.5).sp),
                 )
                 Text(
-                    "${state.history.size} TRIPS SAVED",
+                    "${rides.size} TRIPS SAVED",
                     style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray400),
                     modifier = Modifier.padding(top = 4.dp),
                 )
@@ -94,7 +94,7 @@ fun HistoryScreen(
             )
         }
         Spacer(Modifier.height(48.dp))
-        if (state.history.isEmpty()) {
+        if (rides.isEmpty()) {
             Card(
                 shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
                 colors = CardDefaults.cardColors(containerColor = VeloColors.white),
@@ -130,7 +130,7 @@ fun HistoryScreen(
                 contentPadding = PaddingValues(bottom = VeloDimens.bottomNavReserve.dp + navBottom),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                itemsIndexed(state.history, key = { _, r -> r.id }) { index, ride ->
+                itemsIndexed(rides, key = { _, r -> r.id }) { index, ride ->
                     HistoryRideRow(
                         ride = ride,
                         index = index,
@@ -304,4 +304,3 @@ private fun HistoryMaxSpeed(speedMps: Double) {
         )
     }
 }
-

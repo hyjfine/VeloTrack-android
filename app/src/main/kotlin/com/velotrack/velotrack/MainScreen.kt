@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloSystemBars
@@ -57,7 +58,9 @@ fun VeloMainScreen(
         if (state.view == AppView.DETAIL && state.selectedRide != null) {
             DetailScreen(
                 ride = state.selectedRide,
-                state = state,
+                isAnalysing = state.isAnalysing,
+                aiAnalysis = state.aiAnalysis,
+                analysisError = state.errorMessage,
                 provider = provider,
                 navBottom = navBottom,
                 onBack = onBackDetail,
@@ -69,21 +72,29 @@ fun VeloMainScreen(
                 animationSpec = tween(300, easing = FastOutSlowInEasing),
                 label = "dash_parallax_x",
             )
-            Box(Modifier.offset(x = dashParallaxX)) {
-                RecordingScreen(
-                    state = state,
-                    provider = provider,
-                    debugPermissions = debugPermissions,
-                    navBottom = navBottom,
-                    onStartRecording = onStartRecording,
-                    onCancelStartCountdown = onCancelStartCountdown,
-                    onTogglePause = onTogglePause,
-                    onStopRecording = onStopRecording,
-                    onBeginHold = onBeginHold,
-                    onEndHold = onEndHold,
-                    onToggleDebugLog = onToggleDebugLog,
-                    onSaveDebugLog = onSaveDebugLog,
-                )
+            AnimatedVisibility(
+                visible = state.view == AppView.RECORDING,
+                modifier = Modifier.fillMaxSize(),
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(180)),
+                label = "recording_visibility",
+            ) {
+                Box(Modifier.offset { IntOffset(dashParallaxX.roundToPx(), 0) }) {
+                    RecordingScreen(
+                        state = state,
+                        provider = provider,
+                        debugPermissions = debugPermissions,
+                        navBottom = navBottom,
+                        onStartRecording = onStartRecording,
+                        onCancelStartCountdown = onCancelStartCountdown,
+                        onTogglePause = onTogglePause,
+                        onStopRecording = onStopRecording,
+                        onBeginHold = onBeginHold,
+                        onEndHold = onEndHold,
+                        onToggleDebugLog = onToggleDebugLog,
+                        onSaveDebugLog = onSaveDebugLog,
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = state.view == AppView.HISTORY,
@@ -93,7 +104,7 @@ fun VeloMainScreen(
                 label = "history_overlay",
             ) {
                 HistoryScreen(
-                    state = state,
+                    rides = state.history,
                     navBottom = navBottom,
                     onOpenRide = onOpenRide,
                     onRequestDelete = onRequestDelete,
@@ -119,6 +130,8 @@ fun VeloMainScreen(
 
         DeleteRideModal(
             visible = state.pendingDeleteRideId != null,
+            isDeleting = state.isDeletingRide,
+            errorMessage = state.deleteRideError,
             onConfirm = onConfirmDelete,
             onCancel = onCancelDelete,
         )

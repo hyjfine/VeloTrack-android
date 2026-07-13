@@ -1,6 +1,7 @@
 package com.velotrack.velotrack.speed
 
 import android.util.Log
+import com.velotrack.velotrack.BuildConfig
 import com.velotrack.velotrack.GeoUtils
 import com.velotrack.velotrack.GpsPoint
 import com.velotrack.velotrack.debug.DebugLogFormats
@@ -8,6 +9,7 @@ import com.velotrack.velotrack.debug.DebugLogRecorder
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import java.util.Locale
 
 /**
  * 骑行瞬时速度估算。
@@ -131,7 +133,7 @@ object SpeedEstimator {
             newPoint = newPoint,
         )
         val lastDt = if (prevPoint != null) monoDtMs(prevPoint, newPoint) else -1L
-        if (Log.isLoggable(TAG, Log.DEBUG) || ALWAYS_LOG) {
+        if (BuildConfig.DEBUG && Log.isLoggable(TAG, Log.DEBUG)) {
             Log.d(
                 TAG,
                 "raw=" + kmh(rawDopplerMps) +
@@ -140,11 +142,11 @@ object SpeedEstimator {
                     " ui=" + kmh(display) +
                     " (prev=" + kmh(previousDisplaySpeedMps) + ")" +
                     " m=" + method +
-                    " w=" + String.format("%.2f", dopplerWeight) +
+                    " w=" + String.format(Locale.US, "%.2f", dopplerWeight) +
                     " segs=" + derivedSummary.count +
                     " dt=" + lastDt + "ms" +
-                    " acc=" + String.format("%.1f", newPoint.accuracy) + "m" +
-                    " sacc=" + (newPoint.speedAccuracyMps?.let { String.format("%.2f", it) } ?: "-") +
+                    " acc=" + String.format(Locale.US, "%.1f", newPoint.accuracy) + "m" +
+                    " sacc=" + (newPoint.speedAccuracyMps?.let { String.format(Locale.US, "%.2f", it) } ?: "-") +
                     " gnss=" + newPoint.isGpsFix +
                     " src=" + newPoint.source.label +
                     " segStart=" + segmentStartIndex + "/" + trackPointsIncludingNew.size,
@@ -180,10 +182,7 @@ object SpeedEstimator {
 
     private const val TAG = "VeloSpeed"
 
-    /** 默认开启 debug 输出；调好后改 false 或直接删 Log 行。 */
-    private const val ALWAYS_LOG = true
-
-    private fun kmh(mps: Double): String = String.format("%.1f", mps * 3.6)
+    private fun kmh(mps: Double): String = String.format(Locale.US, "%.1f", mps * 3.6)
 
     // -----------------------------------------------------------------
     // 导数：按时间窗 + 精度加权中值

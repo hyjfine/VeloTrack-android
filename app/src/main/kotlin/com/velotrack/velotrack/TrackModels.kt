@@ -1,5 +1,7 @@
 package com.velotrack.velotrack
 
+import androidx.compose.runtime.Immutable
+
 /**
  * GPS sample stored in the app's canonical coordinate system.
  *
@@ -7,6 +9,7 @@ package com.velotrack.velotrack
  * regional coordinate systems, such as AMap's GCJ-02 basemap in mainland China, must convert only
  * at render time so distance statistics, persistence, and future exports stay globally portable.
  */
+@Immutable
 data class GpsPoint(
     val lat: Double,
     val lng: Double,
@@ -44,6 +47,7 @@ enum class GpsSource(val label: String) {
     UNKNOWN("unknown"),
 }
 
+@Immutable
 data class Ride(
     val id: String,
     val title: String,
@@ -57,6 +61,7 @@ data class Ride(
     val movingDurationSec: Double = 0.0,
 )
 
+@Immutable
 data class LocationPermissionSnapshot(
     val fine: Boolean = false,
     val coarse: Boolean = false,

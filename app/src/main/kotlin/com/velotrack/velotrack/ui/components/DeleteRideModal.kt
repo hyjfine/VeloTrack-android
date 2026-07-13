@@ -39,7 +39,13 @@ import com.velotrack.velotrack.ui.tapFeedbackClickable
 import com.velotrack.velotrack.ui.tabularTextStyle
 
 @Composable
-fun DeleteRideModal(visible: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
+fun DeleteRideModal(
+    visible: Boolean,
+    isDeleting: Boolean = false,
+    errorMessage: String? = null,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val tapFeedback = rememberTapFeedback()
     AnimatedVisibility(
         visible = visible,
@@ -84,23 +90,37 @@ fun DeleteRideModal(visible: Boolean, onConfirm: () -> Unit, onCancel: () -> Uni
                         textAlign = TextAlign.Center,
                         lineHeight = 22.sp,
                     )
+                    if (errorMessage != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            errorMessage,
+                            color = VeloColors.danger,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Spacer(Modifier.height(32.dp))
                     Button(
                         onClick = {
                             tapFeedback()
                             onConfirm()
                         },
+                        enabled = !isDeleting,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = VeloColors.foreground, contentColor = VeloColors.white),
                     ) {
-                        Text("CONFIRM DELETE", style = tabularTextStyle(14.sp, FontWeight.Bold, VeloColors.white, 1.5.sp))
+                        Text(
+                            if (isDeleting) "DELETING..." else "CONFIRM DELETE",
+                            style = tabularTextStyle(14.sp, FontWeight.Bold, VeloColors.white, 1.5.sp),
+                        )
                     }
                     TextButton(
                         onClick = {
                             tapFeedback()
                             onCancel()
                         },
+                        enabled = !isDeleting,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("CANCEL", style = tabularTextStyle(12.sp, FontWeight.Bold, VeloColors.gray400, 1.8.sp))

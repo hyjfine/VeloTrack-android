@@ -21,7 +21,7 @@ fun secretProperty(name: String): String =
 
 android {
     namespace = "com.velotrack.velotrack"
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -35,16 +35,18 @@ android {
     defaultConfig {
         applicationId = "com.velotrack.velotrack"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
 
         val geminiKey = secretProperty("GEMINI_API_KEY")
+        val aiProxyUrl = secretProperty("AI_PROXY_URL")
         val googleMapsKey = secretProperty("GOOGLE_MAPS_API_KEY")
         val amapKey = secretProperty("AMAP_API_KEY")
         val mapProviderOverride = secretProperty("MAP_PROVIDER")
         buildConfigField("String", "GEMINI_API_KEY", "\"${geminiKey.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "AI_PROXY_URL", "\"${aiProxyUrl.replace("\"", "\\\"")}\"")
         buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${googleMapsKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "AMAP_API_KEY", "\"${amapKey.replace("\"", "\\\"")}\"")
         buildConfigField("String", "MAP_PROVIDER_OVERRIDE", "\"${mapProviderOverride.replace("\"", "\\\"")}\"")
@@ -52,8 +54,28 @@ android {
         manifestPlaceholders["AMAP_API_KEY"] = amapKey
     }
 
+    signingConfigs {
+        val storePath = secretProperty("RELEASE_STORE_FILE")
+        val storePasswordValue = secretProperty("RELEASE_STORE_PASSWORD")
+        val keyAliasValue = secretProperty("RELEASE_KEY_ALIAS")
+        val keyPasswordValue = secretProperty("RELEASE_KEY_PASSWORD")
+        if (storePath.isNotBlank() && storePasswordValue.isNotBlank() &&
+            keyAliasValue.isNotBlank() && keyPasswordValue.isNotBlank()
+        ) {
+            create("release") {
+                storeFile = rootProject.file(storePath)
+                storePassword = storePasswordValue
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Release 不内嵌 Gemini 服务端密钥；AI 必须经受控代理调用。
+            buildConfigField("String", "GEMINI_API_KEY", "\"\"")
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -70,6 +92,12 @@ android {
         buildConfig = true
         compose = true
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
+    sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 }
 
 ksp {
@@ -107,4 +135,9 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }

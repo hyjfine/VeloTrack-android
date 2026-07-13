@@ -66,7 +66,9 @@ import java.util.Locale
 @Composable
 fun DetailScreen(
     ride: Ride,
-    state: TrackUiState,
+    isAnalysing: Boolean,
+    aiAnalysis: String?,
+    analysisError: String?,
     provider: MapProvider,
     navBottom: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
@@ -135,7 +137,12 @@ fun DetailScreen(
             Spacer(Modifier.height(32.dp))
             PerformanceCard(ride)
             Spacer(Modifier.height(32.dp))
-            AiCoachingCard(state, onAnalyze)
+            AiCoachingCard(
+                isAnalysing = isAnalysing,
+                aiAnalysis = aiAnalysis,
+                errorMessage = analysisError,
+                onAnalyze = onAnalyze,
+            )
             Spacer(Modifier.height(VeloDimens.bottomNavReserve.dp + navBottom))
         }
     }
@@ -271,7 +278,12 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
 }
 
 @Composable
-private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
+private fun AiCoachingCard(
+    isAnalysing: Boolean,
+    aiAnalysis: String?,
+    errorMessage: String?,
+    onAnalyze: () -> Unit,
+) {
     val tapFeedback = rememberTapFeedback()
     Card(
         shape = RoundedCornerShape(VeloDimens.radiusXxl.dp),
@@ -313,7 +325,7 @@ private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
                 }
                 Spacer(Modifier.height(32.dp))
                 when {
-                    !state.isAnalysing && state.aiAnalysis == null && state.errorMessage == null -> {
+                    !isAnalysing && aiAnalysis == null && errorMessage == null -> {
                         Button(
                             onClick = {
                                 tapFeedback()
@@ -328,18 +340,18 @@ private fun AiCoachingCard(state: TrackUiState, onAnalyze: () -> Unit) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp))
                         }
                     }
-                    state.isAnalysing -> {
+                    isAnalysing -> {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 16.dp)) {
                             Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                             Box(Modifier.fillMaxWidth(0.8f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                             Box(Modifier.fillMaxWidth(0.83f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.1f)))
                         }
                     }
-                    state.errorMessage != null -> {
-                        Text(state.errorMessage, color = VeloColors.danger, fontSize = 16.sp)
+                    errorMessage != null -> {
+                        Text(errorMessage, color = VeloColors.danger, fontSize = 16.sp)
                     }
                     else -> {
-                        AiAnalysisMarkdown(state.aiAnalysis.orEmpty())
+                        AiAnalysisMarkdown(aiAnalysis.orEmpty())
                     }
                 }
             }

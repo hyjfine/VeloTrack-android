@@ -4,6 +4,7 @@ import android.app.Activity
 import android.os.Build
 import android.util.Log
 import android.view.Display
+import kotlin.math.abs
 
 fun Activity.enableAdaptiveHighRefreshRate() {
     val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -13,18 +14,16 @@ fun Activity.enableAdaptiveHighRefreshRate() {
         windowManager.defaultDisplay
     } ?: return
 
-    val supportedModes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        display.supportedModes.toList()
-    } else {
-        emptyList()
+    val supportedModes = display.supportedModes.toList()
+    val currentMode = display.mode
+    val sameResolutionModes = supportedModes.filter {
+        it.physicalWidth == currentMode.physicalWidth && it.physicalHeight == currentMode.physicalHeight
     }
-    val bestMode = supportedModes.maxWithOrNull(
-        compareBy<Display.Mode> { it.refreshRate }
-            .thenBy { it.physicalWidth * it.physicalHeight },
-    )
-    val targetRefreshRate = bestMode?.refreshRate ?: display.refreshRate
+    // 骑行记录优先续航：选择最接近 60Hz 的原生分辨率模式，不再强制 90/120Hz。
+    val bestMode = sameResolutionModes.minByOrNull { abs(it.refreshRate - TARGET_REFRESH_RATE_HZ) }
+    val targetRefreshRate = bestMode?.refreshRate ?: minOf(display.refreshRate, TARGET_REFRESH_RATE_HZ)
     val attrs = window.attributes
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && bestMode != null) {
+    if (bestMode != null) {
         attrs.preferredDisplayModeId = bestMode.modeId
     }
     attrs.preferredRefreshRate = targetRefreshRate
@@ -42,3 +41,5 @@ fun Activity.enableAdaptiveHighRefreshRate() {
             }}",
     )
 }
+
+private const val TARGET_REFRESH_RATE_HZ = 60f

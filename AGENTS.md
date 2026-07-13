@@ -18,7 +18,7 @@
 | 地图 | `MapPane`：国内 `AMAP`，海外 `Google Maps`（`MapProviderSelector`） |
 | 持久化 | Room（`rides` + `gps_points`） |
 | AI | `GeminiClient`（OkHttp，Key 来自 `BuildConfig`） |
-| 构建 | AGP 8.10、Kotlin 2.1、minSdk 29、compileSdk 35 |
+| 构建 | AGP 8.10、Kotlin 2.1、minSdk 29、compileSdk 36 |
 
 ## 目录结构
 
