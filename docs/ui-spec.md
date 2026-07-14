@@ -12,9 +12,11 @@ ViewState = recording | history | detail
 - 底部导航两 Tab：`Dash`（→ recording） / `Log`（→ history / detail）
 - `history → detail`：点击列表项进入；`detail → history`：顶部左上返回键
 - 切换动画：
-  - `recording` ↔ 其他：opacity 淡入淡出
-  - `history` → `detail`：进场 `x: +20 → 0, opacity: 0 → 1`
-  - `detail` → `history`：退场 `x: 0 → -20, opacity: 1 → 0`
+  - `recording` ↔ `history`：页面组合状态常驻，地图不参与位移动画；隐藏时暂停地图渲染与方向传感器，history 图层 opacity 150ms
+  - 底部 Tab 选中块：240ms 横向滑动
+  - `history` → `detail`：260ms 进场 `x: +20 → 0, opacity: 0 → 1`
+  - `detail` → `history`：260ms 退场 `x: 0 → -20, opacity: 1 → 0`
+  - 详情转场期间记录列表常驻；退场结束后才恢复骑行地图并释放详情快照，避免同时挂载两张地图
 
 ## 2. 设计常量（详见 `design-tokens.json`）
 
@@ -100,6 +102,9 @@ radius: 40   padding: 32   bg: white   border: gray-100
 
 ## 4. History 视图
 
+- 整体沿用 Recording 的深色运动仪表视觉：背景 `mapBg`、卡片 `surfaceDarkSoft`、强调色 `accent`。
+- 切换 Tab 时不重复执行列表项级联入场，避免列表重组影响帧率。
+
 ### 4.1 顶部
 ```
 RIDE LOG                      ▬▬▬
@@ -116,7 +121,7 @@ RIDE LOG                      ▬▬▬
      ╱____╲
   WAITING FOR YOUR FIRST RIDE
 ```
-- 卡片：radius 40、bg-white、`py-32`、text-center
+- 卡片：radius 40、深色玻璃表面、`py-32`、text-center
 
 ### 4.3 列表项（Ride Card）
 ```
@@ -124,8 +129,7 @@ RIDE LOG                      ▬▬▬
 │ [icon] Ride on 2026-04-22            │
 │        12.34km   01:02:03   [🗑] [›] │
 └──────────────────────────────────────┘
-padding: 24   radius: 32   bg: white   border: gray-100/50
-enter: y:20,opacity:0 → 0,1 ; delay: idx * 0.05
+padding: 24   radius: 32   bg: surfaceDarkSoft   border: white/10
 active: scale-[0.97]
 ```
 
@@ -136,14 +140,14 @@ active: scale-[0.97]
 ## 5. Detail 视图
 
 ### 5.1 顶栏
-- Sticky，`pt-12`，`px-6 py-8`，bg `white/80 backdrop-blur-xl`
-- 左：返回按钮 40×40 bg `#F4F4F7` radius 16，图标 ChevronLeft（旋转 180°）
-- 中：`SESSION DETAILS` 小写 uppercase bold
-- 右：占位（设置按钮 opacity-0）
+- 地图上方悬浮深色玻璃控件，并避让状态栏
+- 左：返回按钮 44×44、radius 16、白色 ChevronLeft
+- 中：`RIDE DETAILS` 深色玻璃胶囊，荧光黄 uppercase 文案
 
 ### 5.2 地图预览
-- 高 320，上到下白→背景色渐变遮罩
+- 高 320，深色地图，上到下透明→`mapBg` 渐变遮罩
 - 中心为 `points[0]`，zoom 14，Polyline 同 recording
+- 高德与 Google 均隐藏缩放按钮、比例尺、指南针等原生控件，保留手势操作
 
 ### 5.3 Stats Grid（2×2）
 四张卡：
@@ -157,17 +161,16 @@ active: scale-[0.97]
 │ TOTAL DISTANCE      │  ← 9px bold gray-400 uppercase tracking-widest
 │ 12.34km             │  ← 2xl bold tracking-tight
 └─────────────────────┘
-padding: 24   radius: 32   bg: white
-enter: y:20,opacity:0 → 0,1 ; delay: idx * 0.1
+padding: 24   radius: 32   bg: surfaceDarkSoft   border: white/10
 ```
 
 ### 5.4 Performance Chart
-- 容器：padding 32，radius 40，白卡
-- 标题：`PERFORMANCE` 10px black uppercase tracking-[0.25em] gray-300，左侧小竖条 4×16 黑色
+- 容器：padding 32，radius 40，深色玻璃卡
+- 标题：`PERFORMANCE` 10px uppercase tracking-[0.25em] white/40，左侧小竖条 4×16 accent
 - 图表高度 192，`fl_chart` `LineChartData`：
   - X：point index
   - Y：`(speed * 3.6)` km/h
-  - 线：黑色 stroke 3
+  - 线：accent stroke 3
   - 无 dot，hover dot：r=6，边 `#E2FF3B` 3px
   - 网格：水平 only，色 `#f0f0f0`，dash `[3,3]`
 
@@ -197,11 +200,11 @@ Please give a concise analysis in Chinese (suitable for mobile display), includi
 model: `gemini-3-flash-preview`
 
 ## 6. 底部导航（常驻）
-- 固定底部，`rounded-t-[32px]`
-- `pb-8 pt-4`，白色 95% + backdrop-blur-md，上阴影 `0 -10px 30px rgba(0,0,0,0.03)`
+- 固定底部悬浮，深色玻璃胶囊，圆角 30
+- 左右 24px、底部避让系统导航栏，内部 padding 8px
 - 两项：Dash（Activity icon）/ Log（History icon）
-- 激活：`text-black scale-110 strokeWidth:2.5`
-- 未激活：`text-gray-300 strokeWidth:2`
+- 激活：荧光黄选中块 + 深色图标文字；选中块 240ms 连续滑动
+- 未激活：白色 48% 图标文字
 - 文案：10px bold uppercase tracking-widest
 
 ## 7. 删除确认 Modal

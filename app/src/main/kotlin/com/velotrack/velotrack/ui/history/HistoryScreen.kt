@@ -1,13 +1,9 @@
 package com.velotrack.velotrack
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -25,38 +21,33 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Navigation
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
+import com.velotrack.velotrack.ui.VeloGlassSurface
 import com.velotrack.velotrack.ui.tapFeedbackClickable
 import com.velotrack.velotrack.ui.tabularTextStyle
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 @Composable
 fun HistoryScreen(
@@ -64,11 +55,12 @@ fun HistoryScreen(
     navBottom: androidx.compose.ui.unit.Dp,
     onOpenRide: (Ride) -> Unit,
     onRequestDelete: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        Modifier
+        modifier
             .fillMaxSize()
-            .background(VeloColors.background)
+            .background(VeloColors.mapBg)
             .statusBarsPadding()
             .padding(horizontal = VeloDimens.sidePadding.dp)
             .padding(top = 32.dp),
@@ -77,11 +69,11 @@ fun HistoryScreen(
             Column {
                 Text(
                     "RIDE LOG",
-                    style = tabularTextStyle(36.sp, FontWeight.Bold, VeloColors.foreground, (-0.5).sp),
+                    style = tabularTextStyle(36.sp, FontWeight.Bold, Color.White, (-0.5).sp),
                 )
                 Text(
                     "${rides.size} TRIPS SAVED",
-                    style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray400),
+                    style = tabularTextStyle(10.sp, FontWeight.Bold, Color.White.copy(alpha = 0.42f), 1.4.sp),
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
@@ -90,18 +82,17 @@ fun HistoryScreen(
                     .width(48.dp)
                     .height(6.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(VeloColors.foreground),
+                    .background(VeloColors.accent),
             )
         }
-        Spacer(Modifier.height(48.dp))
+        Spacer(Modifier.height(36.dp))
         if (rides.isEmpty()) {
-            Card(
+            VeloGlassSurface(
                 shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
-                colors = CardDefaults.cardColors(containerColor = VeloColors.white),
-                border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
+                baseColor = VeloColors.surfaceDarkSoft,
+                shadowElevation = 10.dp,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusXl.dp)),
+                    .fillMaxWidth(),
             ) {
                 Column(
                     Modifier
@@ -112,13 +103,13 @@ fun HistoryScreen(
                     Icon(
                         Icons.Outlined.Navigation,
                         contentDescription = null,
-                        tint = VeloColors.foreground.copy(alpha = 0.05f),
+                        tint = VeloColors.accent.copy(alpha = 0.20f),
                         modifier = Modifier.size(64.dp),
                     )
                     Spacer(Modifier.height(24.dp))
                     Text(
                         "WAITING FOR YOUR FIRST RIDE",
-                        style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.foreground.copy(alpha = 0.3f), letterSpacing = 3.sp),
+                        style = tabularTextStyle(10.sp, FontWeight.Bold, Color.White.copy(alpha = 0.42f), letterSpacing = 3.sp),
                     )
                 }
             }
@@ -130,10 +121,9 @@ fun HistoryScreen(
                 contentPadding = PaddingValues(bottom = VeloDimens.bottomNavReserve.dp + navBottom),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                itemsIndexed(rides, key = { _, r -> r.id }) { index, ride ->
+                items(rides, key = { it.id }) { ride ->
                     HistoryRideRow(
                         ride = ride,
-                        index = index,
                         onOpen = { onOpenRide(ride) },
                         onDelete = { onRequestDelete(ride.id) },
                     )
@@ -146,58 +136,48 @@ fun HistoryScreen(
 @Composable
 private fun HistoryRideRow(
     ride: Ride,
-    index: Int,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var visible by remember(ride.id) { mutableStateOf(false) }
-    LaunchedEffect(ride.id) {
-        delay(index * 50L)
-        visible = true
+    val cardInteraction = remember { MutableInteractionSource() }
+    val cardPressed by cardInteraction.collectIsPressedAsState()
+    val cardScale by animateFloatAsState(
+        targetValue = if (cardPressed) 0.97f else 1f,
+        animationSpec = tween(140, easing = FastOutSlowInEasing),
+        label = "history_card_press_scale",
+    )
+    val iconBg by animateColorAsState(
+        targetValue = if (cardPressed) VeloColors.accent else Color.White.copy(alpha = 0.07f),
+        animationSpec = tween(140, easing = FastOutSlowInEasing),
+        label = "history_icon_bg",
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (cardPressed) VeloColors.foreground else VeloColors.accent.copy(alpha = 0.78f),
+        animationSpec = tween(140, easing = FastOutSlowInEasing),
+        label = "history_icon_tint",
+    )
+    val titleParts = remember(ride.title) {
+        val prefix = "Ride on "
+        if (ride.title.startsWith(prefix)) {
+            prefix.trimEnd() to ride.title.removePrefix(prefix)
+        } else {
+            ride.title to null
+        }
     }
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInVertically(tween(300, easing = FastOutSlowInEasing)) { 20 } + fadeIn(tween(300)),
+    val movingDurationMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
+        val fromFilter = (ride.movingDurationSec * 1000).toLong()
+        if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
+    }
+    VeloGlassSurface(
+        shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
+        baseColor = VeloColors.surfaceDarkSoft,
+        shadowElevation = 8.dp,
+        showAccentGlow = false,
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(cardScale)
+            .tapFeedbackClickable(interactionSource = cardInteraction) { onOpen() },
     ) {
-        val cardInteraction = remember { MutableInteractionSource() }
-        val cardPressed by cardInteraction.collectIsPressedAsState()
-        val cardScale by animateFloatAsState(
-            targetValue = if (cardPressed) 0.97f else 1f,
-            animationSpec = tween(140, easing = FastOutSlowInEasing),
-            label = "history_card_press_scale",
-        )
-        val iconBg by animateColorAsState(
-            targetValue = if (cardPressed) VeloColors.foreground else VeloColors.background,
-            animationSpec = tween(140, easing = FastOutSlowInEasing),
-            label = "history_icon_bg",
-        )
-        val iconTint by animateColorAsState(
-            targetValue = if (cardPressed) VeloColors.accent else VeloColors.gray300,
-            animationSpec = tween(140, easing = FastOutSlowInEasing),
-            label = "history_icon_tint",
-        )
-        val titleParts = remember(ride.title) {
-            val prefix = "Ride on "
-            if (ride.title.startsWith(prefix)) {
-                prefix.trimEnd() to ride.title.removePrefix(prefix)
-            } else {
-                ride.title to null
-            }
-        }
-        val movingDurationMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
-            val fromFilter = (ride.movingDurationSec * 1000).toLong()
-            if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
-        }
-        Card(
-            shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
-            colors = CardDefaults.cardColors(containerColor = VeloColors.white),
-            modifier = Modifier
-                .fillMaxWidth()
-                .scale(cardScale)
-                .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusLg.dp))
-                .tapFeedbackClickable(interactionSource = cardInteraction) { onOpen() },
-            border = BorderStroke(1.dp, VeloColors.divider.copy(alpha = 0.5f)),
-        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -222,14 +202,14 @@ private fun HistoryRideRow(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             titleParts.first,
-                            style = tabularTextStyle(18.sp, FontWeight.Bold, VeloColors.gray900, (-0.2).sp),
+                            style = tabularTextStyle(18.sp, FontWeight.Bold, Color.White.copy(alpha = 0.94f), (-0.2).sp),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         titleParts.second?.let { date ->
                             Text(
                                 date,
-                                style = tabularTextStyle(18.sp, FontWeight.Bold, VeloColors.gray900, (-0.2).sp),
+                                style = tabularTextStyle(18.sp, FontWeight.Bold, Color.White.copy(alpha = 0.94f), (-0.2).sp),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -255,7 +235,7 @@ private fun HistoryRideRow(
                     Icon(
                         Icons.Outlined.DeleteOutline,
                         contentDescription = "Delete",
-                        tint = VeloColors.gray300,
+                        tint = Color.White.copy(alpha = 0.35f),
                         modifier = Modifier
                             .size(40.dp)
                             .tapFeedbackClickable { onDelete() }
@@ -264,11 +244,10 @@ private fun HistoryRideRow(
                     Icon(
                         Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = VeloColors.gray300,
+                        tint = Color.White.copy(alpha = 0.28f),
                         modifier = Modifier.size(20.dp),
                     )
                 }
-            }
         }
     }
 }
@@ -277,7 +256,7 @@ private fun HistoryRideRow(
 private fun HistoryMetaText(text: String) {
     Text(
         text,
-        style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.3f), 1.5.sp),
+        style = tabularTextStyle(10.sp, FontWeight.Bold, Color.White.copy(alpha = 0.40f), 1.5.sp),
         maxLines = 1,
     )
 }
@@ -289,17 +268,17 @@ private fun HistoryMaxSpeed(speedMps: Double) {
     ) {
         Text(
             text = formatSpeedKmh(speedMps),
-            style = tabularTextStyle(10.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.36f), 0.sp),
+            style = tabularTextStyle(10.sp, FontWeight.Bold, Color.White.copy(alpha = 0.58f), 0.sp),
             maxLines = 1,
         )
         Text(
             text = "KPH",
-            style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.26f), 1.2.sp),
+            style = tabularTextStyle(8.sp, FontWeight.Bold, Color.White.copy(alpha = 0.30f), 1.2.sp),
             maxLines = 1,
         )
         Text(
             text = "MAX",
-            style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.gray900.copy(alpha = 0.26f), 1.2.sp),
+            style = tabularTextStyle(8.sp, FontWeight.Bold, VeloColors.accent.copy(alpha = 0.55f), 1.2.sp),
             maxLines = 1,
         )
     }

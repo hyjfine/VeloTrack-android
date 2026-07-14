@@ -52,10 +52,11 @@
 
 | key | 值 | 用途 |
 |---|---|---|
-| `enterFade` | `{ opacity: [0,1], duration: 300 }` | recording / history |
-| `enterSlide` | `{ x: [20,0], opacity: [0,1], duration: 300 }` | detail 进入 |
-| `exitSlide` | `{ x: [0,-20], opacity: [1,0], duration: 300 }` | detail 退出 |
+| `enterFade` | `{ opacity: [0,1], duration: 150 }` | recording / history 常驻图层切换 |
+| `enterSlide` | `{ x: [20,0], opacity: [0,1], duration: 260 }` | detail 进入 |
+| `exitSlide` | `{ x: [0,-20], opacity: [1,0], duration: 260 }` | detail 退出 |
 | `stagger` | `0.05s` 或 `0.1s` | 列表项 / stats 级联 |
+| `tabIndicatorMs` | `240ms` | 底部导航选中块滑动 |
 | `longPressMs` | `1500` | 停止按钮 |
 | `pressScale` | `0.9` / `0.97` | 按钮 / 卡片按下 |
 
@@ -68,7 +69,7 @@
 | `glassBorderOpacity` | 0.11 | 深色玻璃材质的白色高光描边 |
 | `glassHighlightOpacity` | 0.055 | 玻璃材质顶部高光渐变 |
 
-实时地图不做持续全屏背景采样。录制 HUD 和底部导航使用半透明渐变、描边与小面积柔光模拟毛玻璃，兼顾高德/Google MapView 兼容性和录制续航。
+实时地图不做持续全屏背景采样。删除弹窗的模糊仅作用于 History 的 Compose 图层，不允许覆盖 MapView 的祖先节点。录制 HUD 和底部导航使用半透明渐变、描边与小面积柔光模拟毛玻璃，兼顾高德/Google MapView 兼容性和录制续航。
 
 ### `typography`
 

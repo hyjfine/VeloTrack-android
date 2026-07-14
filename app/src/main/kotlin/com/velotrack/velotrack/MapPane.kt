@@ -54,6 +54,7 @@ import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberMarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
@@ -286,6 +287,7 @@ private fun GpsPoint.toAmapLatLng(): AmapLatLng = wgs84ToAmapLatLng(lat, lng)
  * @param showRouteHeadArrow 是否展示轨迹头部方向箭头，录制页可开启
  * @param routeHeadHeadingDeg 手机实时朝向，非 null 时优先用于箭头旋转；null 时回退到轨迹方向
  * @param fitRouteBounds 是否在地图加载后适配整条轨迹视野，默认关闭
+ * @param isActive 页面当前可见时为 true；false 时暂停地图渲染和相机/轨迹更新
  * @param onMapTouchingChanged 地图触摸状态回调，可用于详情页临时禁用外层滚动
  */
 @Composable
@@ -303,6 +305,7 @@ fun MapPane(
     showRouteHeadArrow: Boolean = false,
     routeHeadHeadingDeg: Float? = null,
     fitRouteBounds: Boolean = false,
+    isActive: Boolean = true,
     onMapTouchingChanged: (Boolean) -> Unit = {},
 ) {
     val configured = when (provider) {
@@ -336,6 +339,7 @@ fun MapPane(
             showRouteHeadArrow = showRouteHeadArrow,
             routeHeadHeadingDeg = routeHeadHeadingDeg,
             fitRouteBounds = fitRouteBounds,
+            isActive = isActive,
             onMapTouchingChanged = onMapTouchingChanged,
         )
         MapProvider.GOOGLE_MAPS -> GooglePane(
@@ -351,6 +355,7 @@ fun MapPane(
             showRouteHeadArrow = showRouteHeadArrow,
             routeHeadHeadingDeg = routeHeadHeadingDeg,
             fitRouteBounds = fitRouteBounds,
+            isActive = isActive,
             onMapTouchingChanged = onMapTouchingChanged,
         )
     }
@@ -371,6 +376,7 @@ private fun GooglePane(
     showRouteHeadArrow: Boolean,
     routeHeadHeadingDeg: Float?,
     fitRouteBounds: Boolean,
+    isActive: Boolean,
     onMapTouchingChanged: (Boolean) -> Unit,
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -381,6 +387,10 @@ private fun GooglePane(
             GoogleLatLng(centerLat, centerLng),
             mapZoom,
         )
+    }
+    if (!isActive) {
+        Box(modifier = modifier.background(if (darkMode) VeloColors.mapBg else VeloColors.background))
+        return
     }
     val polyline = remember(pointsTrackKey, mapResumeEpoch) { points.map { GoogleLatLng(it.lat, it.lng) } }
     val canFitRouteBounds = fitRouteBounds && hasDistinctRoutePoints(points)
@@ -514,6 +524,11 @@ private fun GooglePane(
             isMyLocationEnabled = false,
             mapStyleOptions = if (darkMode) MapStyleOptions(GOOGLE_DARK_MAP_STYLE) else null,
         ),
+        uiSettings = MapUiSettings(
+            compassEnabled = false,
+            mapToolbarEnabled = false,
+            zoomControlsEnabled = false,
+        ),
         cameraPositionState = cameraState,
         onMapLoaded = { isMapLoaded = true },
     ) {
@@ -589,6 +604,7 @@ private fun AmapPane(
     showRouteHeadArrow: Boolean,
     routeHeadHeadingDeg: Float?,
     fitRouteBounds: Boolean,
+    isActive: Boolean,
     onMapTouchingChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -605,6 +621,7 @@ private fun AmapPane(
     var lastPolylineResumeEpoch by remember { mutableIntStateOf(-1) }
     val followLatestPositionState by rememberUpdatedState(followLatestPosition)
     val onMapTouchingChangedState by rememberUpdatedState(onMapTouchingChanged)
+    val isActiveState by rememberUpdatedState(isActive)
     var hasUserAdjustedCamera by remember { mutableStateOf(false) }
     var lastUserGestureAt by remember { mutableLongStateOf(0L) }
     var lastCameraMoveAt by remember { mutableLongStateOf(0L) }
@@ -672,6 +689,9 @@ private fun AmapPane(
                 aMap = map
                 map.uiSettings.isZoomGesturesEnabled = true
                 map.uiSettings.isScrollGesturesEnabled = true
+                map.uiSettings.isZoomControlsEnabled = false
+                map.uiSettings.isScaleControlsEnabled = false
+                map.uiSettings.isCompassEnabled = false
                 map.setOnMapTouchListener { event ->
                     notifyMapTouch(event)
                     when (event.actionMasked) {
@@ -693,13 +713,12 @@ private fun AmapPane(
     DisposableEffect(mapView, lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> if (isActiveState) mapView.onResume()
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 else -> Unit
             }
         }
         lifecycle.addObserver(observer)
-        mapView.onResume()
         onDispose {
             lifecycle.removeObserver(observer)
             removeEndpointMarkers()
@@ -712,13 +731,22 @@ private fun AmapPane(
             mapView.onDestroy()
         }
     }
+    LaunchedEffect(mapView, lifecycle, isActive) {
+        if (isActive && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            mapView.onResume()
+        } else {
+            mapView.onPause()
+        }
+    }
 
     val pxPerDp = LocalContext.current.resources.displayMetrics.density
-    LaunchedEffect(aMap, darkMode) {
+    LaunchedEffect(aMap, darkMode, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         map.mapType = if (darkMode) AMap.MAP_TYPE_NIGHT else AMap.MAP_TYPE_NORMAL
     }
-    LaunchedEffect(pointsTrackKey, aMap, polylineWidth, pxPerDp, mapResumeEpoch) {
+    LaunchedEffect(pointsTrackKey, aMap, polylineWidth, pxPerDp, mapResumeEpoch, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         if (points.size < 2) {
             mapView.post {
@@ -760,7 +788,8 @@ private fun AmapPane(
             }
         }
     }
-    LaunchedEffect(points, aMap, fitRouteBounds, markerDensity) {
+    LaunchedEffect(points, aMap, fitRouteBounds, markerDensity, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         if (!canFitRouteBounds || points.size < 2) return@LaunchedEffect
         val boundsBuilder = AmapLatLngBounds.Builder()
@@ -772,7 +801,8 @@ private fun AmapPane(
             lastCameraLatLng = points.last().toAmapLatLng()
         }
     }
-    LaunchedEffect(points, aMap, showEndpointMarkers, startMarkerIcon, finishMarkerIcon) {
+    LaunchedEffect(points, aMap, showEndpointMarkers, startMarkerIcon, finishMarkerIcon, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         if (!showEndpointMarkers || points.size < 2) {
             removeEndpointMarkers()
@@ -813,7 +843,8 @@ private fun AmapPane(
             currentFinishMarker.setZIndex(ROUTE_ENDPOINT_Z_INDEX)
         }
     }
-    LaunchedEffect(pointsTrackKey, aMap, showRouteHeadArrow, routeHeadHeadingDeg, routeHeadArrowIcon, mapResumeEpoch) {
+    LaunchedEffect(pointsTrackKey, aMap, showRouteHeadArrow, routeHeadHeadingDeg, routeHeadArrowIcon, mapResumeEpoch, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         val head = if (showRouteHeadArrow) routeHeadFromPoints(points, routeHeadHeadingDeg) else null
         if (head == null) {
@@ -848,7 +879,8 @@ private fun AmapPane(
     val latestTarget by rememberUpdatedState(
         if (followLatestPosition || focus == null) wgs84ToAmapLatLng(centerLat, centerLng) else focus.toAmapLatLng(),
     )
-    LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt, aMap) {
+    LaunchedEffect(focus?.lat, focus?.lng, centerLat, centerLng, followLatestPosition, mapZoom, lastUserGestureAt, aMap, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         if (!followLatestPosition && canFitRouteBounds) return@LaunchedEffect
         if (followLatestPosition && lastUserGestureAt > 0L) return@LaunchedEffect
@@ -867,7 +899,8 @@ private fun AmapPane(
         lastCameraMoveAt = now
         lastCameraLatLng = latestTarget
     }
-    LaunchedEffect(lastUserGestureAt, followLatestPosition, mapZoom, aMap) {
+    LaunchedEffect(lastUserGestureAt, followLatestPosition, mapZoom, aMap, isActive) {
+        if (!isActive) return@LaunchedEffect
         val map = aMap ?: return@LaunchedEffect
         if (!followLatestPosition || lastUserGestureAt == 0L) return@LaunchedEffect
         val gestureAt = lastUserGestureAt

@@ -1,6 +1,5 @@
 package com.velotrack.velotrack
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,10 +26,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
 import com.velotrack.velotrack.ui.VeloDimens
+import com.velotrack.velotrack.ui.VeloGlassSurface
 import com.velotrack.velotrack.ui.rememberTapFeedback
 import com.velotrack.velotrack.ui.tapFeedbackClickable
 import com.velotrack.velotrack.ui.tabularTextStyle
@@ -73,13 +71,14 @@ fun DetailScreen(
     navBottom: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
     onAnalyze: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val scroll = rememberScrollState()
     var isMapTouching by remember { mutableStateOf(false) }
     Column(
-        Modifier
+        modifier
             .fillMaxSize()
-            .background(VeloColors.background)
+            .background(VeloColors.mapBg)
             .verticalScroll(scroll, enabled = !isMapTouching),
     ) {
         Box(Modifier.fillMaxWidth().height(320.dp)) {
@@ -90,6 +89,7 @@ fun DetailScreen(
                 followLatestPosition = false,
                 mapZoom = 14f,
                 polylineWidth = 5f,
+                darkMode = true,
                 showEndpointMarkers = true,
                 fitRouteBounds = true,
                 onMapTouchingChanged = { touching ->
@@ -101,17 +101,22 @@ fun DetailScreen(
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color.White.copy(alpha = 0.1f), VeloColors.background),
+                            0f to Color.Black.copy(alpha = 0.08f),
+                            0.62f to Color.Transparent,
+                            1f to VeloColors.mapBg,
                         ),
                     ),
             )
-            Surface(
+            VeloGlassSurface(
                 shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
-                color = VeloColors.background,
+                baseColor = VeloColors.surfaceDark,
+                shadowElevation = 10.dp,
+                showAccentGlow = false,
                 modifier = Modifier
                     .align(Alignment.TopStart)
+                    .statusBarsPadding()
                     .padding(24.dp)
-                    .size(40.dp)
+                    .size(44.dp)
                     .clip(RoundedCornerShape(VeloDimens.radiusSm.dp))
                     .tapFeedbackClickable { onBack() },
             ) {
@@ -119,18 +124,34 @@ fun DetailScreen(
                     Icon(
                         Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                         contentDescription = "Back",
-                        tint = VeloColors.gray400,
+                        tint = Color.White.copy(alpha = 0.78f),
                         modifier = Modifier
                             .size(20.dp)
                             .rotate(180f),
                     )
                 }
             }
+            VeloGlassSurface(
+                shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
+                baseColor = VeloColors.surfaceDark,
+                shadowElevation = 8.dp,
+                showAccentGlow = false,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 24.dp),
+            ) {
+                Text(
+                    "RIDE DETAILS",
+                    style = tabularTextStyle(10.sp, FontWeight.Black, VeloColors.accent, 1.8.sp),
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                )
+            }
         }
 
         Column(
             Modifier
-                .padding(horizontal = 32.dp)
+                .padding(horizontal = VeloDimens.sidePadding.dp)
                 .offset(y = (-48).dp),
         ) {
             StatsGrid(ride)
@@ -173,21 +194,21 @@ private fun StatsGrid(ride: Ride) {
 
 @Composable
 private fun RowScope.StatCell(label: String, value: String) {
-    Card(
+    VeloGlassSurface(
         shape = RoundedCornerShape(VeloDimens.radiusLg.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.white),
-        border = BorderStroke(1.dp, VeloColors.divider),
+        baseColor = VeloColors.surfaceDarkSoft,
+        shadowElevation = 8.dp,
+        showAccentGlow = false,
         modifier = Modifier
-            .weight(1f)
-            .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusLg.dp)),
+            .weight(1f),
     ) {
         Column(Modifier.padding(24.dp)) {
             Text(
                 label.uppercase(Locale.US),
-                style = tabularTextStyle(9.sp, FontWeight.Bold, VeloColors.gray400, 2.sp),
+                style = tabularTextStyle(9.sp, FontWeight.Bold, Color.White.copy(alpha = 0.38f), 2.sp),
             )
             Spacer(Modifier.height(6.dp))
-            Text(value, style = tabularTextStyle(24.sp, FontWeight.Bold, VeloColors.foreground, (-0.2).sp))
+            Text(value, style = tabularTextStyle(24.sp, FontWeight.Bold, Color.White.copy(alpha = 0.94f), (-0.2).sp))
         }
     }
 }
@@ -197,13 +218,13 @@ private fun PerformanceCard(ride: Ride) {
     val chartSpeedsKmh = remember(ride.id, ride.points.size) {
         RideStats.chartSpeedMps(ride.points).map { (it * 3.6).toFloat() }
     }
-    Card(
+    VeloGlassSurface(
         shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.white),
-        border = BorderStroke(1.dp, VeloColors.divider),
+        baseColor = VeloColors.surfaceDarkSoft,
+        shadowElevation = 8.dp,
+        showAccentGlow = false,
         modifier = Modifier
-            .fillMaxWidth()
-            .shadow(2.dp, RoundedCornerShape(VeloDimens.radiusXl.dp)),
+            .fillMaxWidth(),
     ) {
         Column(Modifier.padding(32.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -212,11 +233,11 @@ private fun PerformanceCard(ride: Ride) {
                         .width(4.dp)
                         .height(16.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(VeloColors.foreground),
+                        .background(VeloColors.accent),
                 )
                 Text(
                     "PERFORMANCE",
-                    style = tabularTextStyle(10.sp, FontWeight.Black, VeloColors.gray300, 2.5.sp),
+                    style = tabularTextStyle(10.sp, FontWeight.Black, Color.White.copy(alpha = 0.42f), 2.5.sp),
                 )
             }
             Spacer(Modifier.height(32.dp))
@@ -239,7 +260,7 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
         }
     } else {
         val strokePx = with(density) { 3.dp.toPx() }
-        val gridColor = Color(0xFFF0F0F0)
+        val gridColor = Color.White.copy(alpha = 0.08f)
         Canvas(modifier) {
             val padL = 4f
             val padR = 8f
@@ -269,7 +290,7 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
                 }
                 drawPath(
                     path = path,
-                    color = VeloColors.foreground,
+                    color = VeloColors.accent,
                     style = Stroke(width = strokePx, cap = StrokeCap.Round),
                 )
             }
@@ -285,12 +306,12 @@ private fun AiCoachingCard(
     onAnalyze: () -> Unit,
 ) {
     val tapFeedback = rememberTapFeedback()
-    Card(
+    VeloGlassSurface(
         shape = RoundedCornerShape(VeloDimens.radiusXxl.dp),
-        colors = CardDefaults.cardColors(containerColor = VeloColors.foreground),
+        baseColor = VeloColors.surfaceDark,
+        shadowElevation = 16.dp,
         modifier = Modifier
-            .fillMaxWidth()
-            .shadow(24.dp, RoundedCornerShape(VeloDimens.radiusXxl.dp)),
+            .fillMaxWidth(),
     ) {
         Box(Modifier.fillMaxWidth()) {
             Icon(
@@ -332,7 +353,7 @@ private fun AiCoachingCard(
                                 onAnalyze()
                             },
                             shape = RoundedCornerShape(VeloDimens.radiusSm.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = VeloColors.white, contentColor = VeloColors.foreground),
+                            colors = ButtonDefaults.buttonColors(containerColor = VeloColors.accent, contentColor = VeloColors.foreground),
                             modifier = Modifier.heightIn(min = 52.dp),
                         ) {
                             Text("ANALYZE MY PERFORMANCE", style = tabularTextStyle(12.sp, FontWeight.Bold, VeloColors.foreground, 1.5.sp))

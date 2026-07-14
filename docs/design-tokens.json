@@ -49,12 +49,13 @@
     "body":     { "size": 14, "weight": 400, "tracking":  0.00 }
   },
   "motion": {
-    "enterFade":   { "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
-    "enterSlideX": { "xFrom": 20, "xTo": 0, "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
-    "exitSlideX":  { "xFrom":  0, "xTo": -20, "opacityFrom": 1, "opacityTo": 0, "durationMs": 300 },
+    "enterFade":   { "opacityFrom": 0, "opacityTo": 1, "durationMs": 150 },
+    "enterSlideX": { "xFrom": 20, "xTo": 0, "opacityFrom": 0, "opacityTo": 1, "durationMs": 260 },
+    "exitSlideX":  { "xFrom":  0, "xTo": -20, "opacityFrom": 1, "opacityTo": 0, "durationMs": 260 },
     "enterSlideY": { "yFrom": 20, "yTo": 0, "opacityFrom": 0, "opacityTo": 1, "durationMs": 300 },
     "staggerSmallMs": 50,
     "staggerLargeMs": 100,
+    "tabIndicatorMs": 240,
     "longPressMs":    1500,
     "pressScaleButton": 0.90,
     "pressScaleCard":   0.97
