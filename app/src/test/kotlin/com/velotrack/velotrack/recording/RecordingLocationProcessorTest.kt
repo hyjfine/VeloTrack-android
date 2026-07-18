@@ -4,6 +4,7 @@ import com.velotrack.velotrack.GpsPoint
 import com.velotrack.velotrack.GpsSource
 import com.velotrack.velotrack.speed.TrackDataFilter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,11 +95,35 @@ class RecordingLocationProcessorTest {
     }
 
     @Test
+    fun rejectedLowQualityOutlier_doesNotPublishEstimateFromOldTrack() {
+        var state = RecordingSessionState(isRecording = true, recordingStartAt = 1_000_000L)
+        listOf(
+            point(31.00000, 121.00000, 0),
+            point(31.00003, 121.00000, 1),
+            point(31.00006, 121.00000, 2),
+            point(31.00009, 121.00000, 3),
+        ).forEach { state = apply(state, it).state }
+
+        val result = apply(
+            state,
+            point(31.10000, 121.10000, 4).copy(accuracy = 18.0),
+        )
+
+        assertTrue(result.state.lastLocationDropReason.orEmpty().startsWith("outlier:"))
+        assertNull(result.state.lastSpeedMethod)
+        assertNull(result.state.lastDerivedSpeedMps)
+    }
+
+    @Test
     fun fixProducedBeforeActiveSegment_isRejectedEvenWithNewWallTimestamp() {
         val state = RecordingSessionState(isRecording = true, recordingStartAt = 1_000_000L)
         val result = RecordingLocationProcessor.apply(
             state = state,
-            point = point(31.0, 121.0, 1).copy(monotonicMs = 9_000L, receivedMonotonicMs = 10_500L),
+            point = point(31.0, 121.0, 1).copy(
+                monotonicMs = 9_000L,
+                fixMonotonicMs = 9_000L,
+                receivedMonotonicMs = 10_500L,
+            ),
             recordingStartAt = 1_000_000L,
             recordingStartMonotonicMs = 10_000L,
             isRecording = true,
@@ -117,6 +142,7 @@ class RecordingLocationProcessorTest {
             point = point(31.0, 121.0, 1).copy(
                 timestamp = 900_000L,
                 monotonicMs = 10_500L,
+                fixMonotonicMs = 10_500L,
                 receivedMonotonicMs = 0L,
             ),
             recordingStartAt = 1_000_000L,
@@ -127,6 +153,27 @@ class RecordingLocationProcessorTest {
 
         assertEquals("anchor confirmation 1/3", result.state.lastLocationDropReason)
         assertEquals(1, result.state.consecutiveAnchorCandidateCount)
+    }
+
+    @Test
+    fun callbackTimeWithoutFixTime_doesNotHideOldProviderTimestamp() {
+        val state = RecordingSessionState(isRecording = true, recordingStartAt = 1_000_000L)
+        val result = RecordingLocationProcessor.apply(
+            state = state,
+            point = point(31.0, 121.0, 1).copy(
+                timestamp = 900_000L,
+                monotonicMs = 10_500L,
+                fixMonotonicMs = 0L,
+                receivedMonotonicMs = 10_500L,
+            ),
+            recordingStartAt = 1_000_000L,
+            recordingStartMonotonicMs = 10_000L,
+            isRecording = true,
+            isPaused = false,
+        )
+
+        assertEquals("before recording start", result.state.lastLocationDropReason)
+        assertTrue(result.state.livePoints.isEmpty())
     }
 
     private fun apply(state: RecordingSessionState, point: GpsPoint): RecordingLocationProcessor.Result =
@@ -144,6 +191,7 @@ class RecordingLocationProcessorTest {
             lng = lng,
             timestamp = 1_000_000L + second * 1_200L,
             monotonicMs = 10_000L + second * 1_200L,
+            fixMonotonicMs = 10_000L + second * 1_200L,
             speedMps = 4.0,
             altitude = 10.0,
             accuracy = 3.0,

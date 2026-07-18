@@ -163,6 +163,7 @@ class RideRepository(
             altitude = point.altitude,
             accuracy = point.accuracy,
             segmentId = point.segmentId,
+            monotonicMs = point.monotonicMs,
         )
 
     private fun pointEntityToModel(entity: GpsPointEntity): GpsPoint =
@@ -174,5 +175,6 @@ class RideRepository(
             altitude = entity.altitude,
             accuracy = entity.accuracy,
             segmentId = entity.segmentId,
+            monotonicMs = entity.monotonicMs,
         )
 }

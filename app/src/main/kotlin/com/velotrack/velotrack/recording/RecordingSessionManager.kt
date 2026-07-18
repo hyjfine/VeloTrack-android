@@ -201,24 +201,9 @@ class RecordingSessionManager(
 
         val rideId = s.rideId ?: return onComplete(null)
         val points = s.livePoints
-
-        val stats = RideStats.summarize(points)
-        val totalDistance = stats.totalDistanceM
-        val avgSpeed = stats.avgSpeedMps
-        val maxSpeed = stats.maxSpeedMps
         val start = recordingStartAt
         val end = if (points.isEmpty()) System.currentTimeMillis() else points.last().timestamp
-        val ride = Ride(
-            id = rideId,
-            title = rideTitle,
-            startTime = start,
-            endTime = end,
-            points = points,
-            totalDistance = totalDistance,
-            avgSpeed = avgSpeed,
-            maxSpeed = maxSpeed,
-            movingDurationSec = stats.movingDurationSec,
-        )
+        val title = rideTitle
 
         _state.update {
             it.copy(
@@ -231,8 +216,34 @@ class RecordingSessionManager(
 
         // 先把不足一个 batch 的点排入队列，再让最终事务排在所有增量写之后。
         flushPendingPoints()
-        val finalize = enqueueDbWrite("finalizeRide") { repo.finalizeRide(ride) }
         scope.launch {
+            // 长轨迹的尖峰扫描和汇总不应阻塞主线程或 Compose 绘制。
+            val statsResult = withContext(io) { runCatching { RideStats.summarize(points) } }
+            val stats = statsResult.getOrElse { error ->
+                Log.e(TAG, "summarize ride failed; draft retained for retry", error)
+                _state.update {
+                    it.copy(
+                        isSaving = false,
+                        isPaused = true,
+                        persistenceError = "轨迹统计失败，请长按停止重试",
+                    )
+                }
+                notifyService()
+                onComplete(null)
+                return@launch
+            }
+            val ride = Ride(
+                id = rideId,
+                title = title,
+                startTime = start,
+                endTime = end,
+                points = points,
+                totalDistance = stats.totalDistanceM,
+                avgSpeed = stats.avgSpeedMps,
+                maxSpeed = stats.maxSpeedMps,
+                movingDurationSec = stats.movingDurationSec,
+            )
+            val finalize = enqueueDbWrite("finalizeRide") { repo.finalizeRide(ride) }
             val result = finalize.await()
             if (result.isSuccess) {
                 _state.value = RecordingSessionState(
@@ -383,8 +394,8 @@ class RecordingSessionManager(
                 rideId = ride.id,
                 recordingStartAt = ride.startTime,
                 elapsedMs = elapsed,
-                livePoints = points,
-                displayPoints = display.points,
+                livePoints = points.asPersistentTrackPoints(),
+                displayPoints = display.points.asPersistentTrackPoints(),
                 mapPoints = com.velotrack.velotrack.speed.TrackDataFilter.downsampleForMap(display.points),
                 displayDistanceM = display.totalDistanceM,
                 spikePointIndices = spikes,

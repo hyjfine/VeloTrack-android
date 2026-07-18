@@ -4,6 +4,7 @@ import com.velotrack.velotrack.GpsPoint
 import com.velotrack.velotrack.GpsSource
 import com.velotrack.velotrack.speed.SpeedEstimator
 import com.velotrack.velotrack.speed.TrackDataFilter
+import com.velotrack.velotrack.tracking.TrackingPolicy
 
 /**
  * 将原始定位样本合并进录制会话。
@@ -12,8 +13,6 @@ import com.velotrack.velotrack.speed.TrackDataFilter
 object RecordingLocationProcessor {
     private const val TRACK_POINT_MAX_ACCURACY_M = 20.0
     private const val TRACK_POINT_MIN_ACCURACY_M = 0.1
-    /** 迟滞恢复期间仅用 GNSS Doppler 估速的精度上限（与 SpeedEstimator 一致）。 */
-    private const val SPEED_DOPPLER_ONLY_MAX_ACCURACY_M = 15.0
     private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
     /** 连续劣化帧数达到此值才进入信号暂停（迟滞进入）。 */
     private const val SIGNAL_DEGRADE_REQUIRED_COUNT = 2
@@ -164,32 +163,29 @@ object RecordingLocationProcessor {
         val speedEstimate = when {
             !frameGood -> null
             canUseForTrack -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = state.livePoints + candidateForTrack,
+                trackPointsIncludingNew = AppendedPointView(state.livePoints, candidateForTrack),
                 newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = speedSegmentStartIndex,
             )
-            trackPausedForSignal && point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M -> SpeedEstimator.estimate(
+            trackPausedForSignal && point.accuracy <= TrackingPolicy.DOPPLER_MAX_ACCURACY_M -> SpeedEstimator.estimate(
                 trackPointsIncludingNew = listOf(candidateForTrack),
                 newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = 0,
             )
-            outlierReason != null -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) {
-                    listOf(candidateForTrack)
-                } else {
-                    state.livePoints
-                },
+            outlierReason != null && point.accuracy <= TrackingPolicy.DOPPLER_MAX_ACCURACY_M -> SpeedEstimator.estimate(
+                trackPointsIncludingNew = listOf(candidateForTrack),
                 newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
-                segmentStartIndex = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) 0 else segmentStartIndex,
+                segmentStartIndex = 0,
             )
+            outlierReason != null -> null
             else -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = state.livePoints + candidateForTrack,
+                trackPointsIncludingNew = AppendedPointView(state.livePoints, candidateForTrack),
                 newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
@@ -225,7 +221,11 @@ object RecordingLocationProcessor {
         } else {
             null
         }
-        val points = if (acceptedPoint != null) state.livePoints + acceptedPoint else state.livePoints
+        val points = if (acceptedPoint != null) {
+            state.livePoints.appendTrackPoint(acceptedPoint)
+        } else {
+            state.livePoints
+        }
 
         val nextTrackPausedForSignal = when {
             acceptedPoint != null -> false
@@ -297,9 +297,9 @@ object RecordingLocationProcessor {
         recordingStartMonotonicMs: Long,
     ): String? {
         if (point.isCached) return "cached location"
-        val hasComparableMonotonicTime = recordingStartMonotonicMs > 0L && point.monotonicMs > 0L
+        val hasComparableMonotonicTime = recordingStartMonotonicMs > 0L && point.fixMonotonicMs > 0L
         if (hasComparableMonotonicTime) {
-            if (point.monotonicMs < recordingStartMonotonicMs) return "before active segment"
+            if (point.fixMonotonicMs < recordingStartMonotonicMs) return "before active segment"
         } else {
             // Location.time 与系统壁钟都会受手动校时/NTP 回拨影响，仅在缺少单调时间时兜底。
             if (point.timestamp < recordingStartAt) return "before recording start"
@@ -367,8 +367,8 @@ object RecordingLocationProcessor {
         val display = TrackDataFilter.displaySnapshot(acceptedPoints)
         return Result(
             state = state.copy(
-                livePoints = acceptedPoints,
-                displayPoints = display.points,
+                livePoints = acceptedPoints.asPersistentTrackPoints(),
+                displayPoints = display.points.asPersistentTrackPoints(),
                 mapPoints = display.points,
                 displayDistanceM = display.totalDistanceM,
                 spikePointIndices = TrackDataFilter.spikeIndices(acceptedPoints),
@@ -431,9 +431,9 @@ object RecordingLocationProcessor {
             state.spikePointIndices
         }
         val nextDisplay = if (previousIsNewSpike) {
-            state.displayPoints.dropLast(1) + acceptedPoint
+            state.displayPoints.replaceLastTrackPoint(acceptedPoint)
         } else {
-            state.displayPoints + acceptedPoint
+            state.displayPoints.appendTrackPoint(acceptedPoint)
         }
         val segmentDistance = TrackDataFilter.validSegmentDistanceMeters(previous, acceptedPoint) ?: 0.0
         val previousDisplayPoint = if (previousIsNewSpike) {

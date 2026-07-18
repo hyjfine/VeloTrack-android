@@ -21,11 +21,10 @@ data class GpsPoint(
     val source: GpsSource = GpsSource.UNKNOWN,
     /** true 表示位置来自本次实时 GPS/GNSS fix；缓存、网络和被动位置必须为 false。 */
     val isGpsFix: Boolean = false,
-    /**
-     * 该样本到达时的 [android.os.SystemClock.elapsedRealtime] 时刻（毫秒），
-     * 用于段速 dt，避免 Location.time 壁钟跳变 / 缓存帧时间倒置的影响。运行时字段，不持久化。
-     */
+    /** 用于同一轨迹段内计算 dt 的单调时间；优先取 fix 时间，SDK 不提供时取回调到达时间。 */
     val monotonicMs: Long = 0L,
+    /** provider 明确给出的 fix elapsedRealtime；缺失时为 0，禁止用回调时间伪装。 */
+    val fixMonotonicMs: Long = 0L,
     /**
      * GNSS 多普勒速度 1σ 误差（m/s），可用于权重判定。仅 API 26+ Location 提供；缺失为 null。
      * 运行时字段，不持久化。
@@ -35,7 +34,7 @@ data class GpsPoint(
     val isSpeedTrustworthy: Boolean = isGpsFix,
     /** 系统或 SDK 返回的 last-known/cache 位置只能用于地图预览，禁止进入正式轨迹。 */
     val isCached: Boolean = false,
-    /** 回调实际到达进程的 elapsedRealtime，运行时用于诊断与新鲜度判断。 */
+    /** 回调实际到达进程的 elapsedRealtime，用于诊断与回调积压判断。 */
     val receivedMonotonicMs: Long = monotonicMs,
     /** 轨迹段编号；暂停恢复、信号重锚时递增，禁止跨段累计距离或绘制连线。 */
     val segmentId: Int = 0,

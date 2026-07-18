@@ -6,6 +6,7 @@ import com.velotrack.velotrack.GeoUtils
 import com.velotrack.velotrack.GpsPoint
 import com.velotrack.velotrack.debug.DebugLogFormats
 import com.velotrack.velotrack.debug.DebugLogRecorder
+import com.velotrack.velotrack.tracking.TrackingPolicy
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -23,18 +24,9 @@ object SpeedEstimator {
     /** 约 1.0 km/h，低于此判定为静止。 */
     const val STANDSTILL_SPEED_MPS = 0.28
 
-    // ---- 段速过滤 ----
-    private const val MAX_SEGMENT_GAP_MS = 10_000L
-
-    /** GPS 偶发会推 300ms 间隔的「补点」，dt 太小会把位置抖动放大成几十 km/h。 */
-    private const val MIN_SEGMENT_DT_MS = 700L
-
     /** 基础静止位移阈值（米）；实际取 max(此值, accuracy * 0.3)。略低于 TrackDataFilter，便于起步估速。 */
     private const val MIN_SEGMENT_DISTANCE_BASE_M = 1.5
     private const val MIN_SEGMENT_DISTANCE_ACC_FACTOR = 0.3
-
-    /** 约 90 km/h，单段尖峰丢弃。 */
-    private const val MAX_PLAUSIBLE_SEGMENT_MPS = 25.0
 
     // ---- 时间窗口（按时间，不按段数） ----
     private const val DERIVED_WINDOW_MS = 3_500L
@@ -42,7 +34,6 @@ object SpeedEstimator {
     private const val DERIVED_MAX_SEGMENTS = 6
 
     // ---- 多普勒融合 ----
-    private const val DOPPLER_MAX_ACCURACY_M = 15.0
     private const val DOPPLER_MIN_MPS = 0.15
 
     /** speedAccuracy 已知时优先用；未知时退化到经验权重（AMap 无 sacc 时偏保守）。 */
@@ -63,9 +54,6 @@ object SpeedEstimator {
     private const val MAX_ACCEL_MPS2 = 2.5
     /** 强刹车（碟刹）极限（m/s²） */
     private const val MAX_DECEL_MPS2 = 6.0
-
-    /** AMap 不报多普勒时，每帧对位移导数的衰减系数，避免旧速度长期冻结。 */
-    private const val RAW_ZERO_DERIVED_DECAY = 0.88
 
     data class Estimate(
         /** 仪表显示（短 EMA + 加速度限幅） */
@@ -105,15 +93,6 @@ object SpeedEstimator {
         val instant = when {
             derived == null && dopplerWeight > 0.0 -> rawDopplerMps
             derived == null -> 0.0
-            rawDopplerMps < DOPPLER_MIN_MPS && dopplerWeight <= 0.0 -> {
-                val decayed = derived.coerceAtLeast(0.0) *
-                    min(RAW_ZERO_DERIVED_DECAY, if (previousDisplaySpeedMps > 0.0) {
-                        previousDisplaySpeedMps / derived.coerceAtLeast(STANDSTILL_SPEED_MPS)
-                    } else {
-                        RAW_ZERO_DERIVED_DECAY
-                    })
-                decayed.coerceAtLeast(0.0)
-            }
             dopplerWeight > 0.0 -> dopplerWeight * rawDopplerMps + (1.0 - dopplerWeight) * derived.coerceAtLeast(0.0)
             else -> derived
         }
@@ -121,7 +100,6 @@ object SpeedEstimator {
         val method = when {
             derived == null && dopplerWeight > 0.0 -> "doppler"
             derived == null -> "hold-zero"
-            rawDopplerMps < DOPPLER_MIN_MPS && dopplerWeight <= 0.0 -> "derived-decay"
             dopplerWeight > 0.0 -> "fused"
             else -> "derived"
         }
@@ -201,8 +179,8 @@ object SpeedEstimator {
             val a = points[i - 1]
             val b = points[i]
             if (a.segmentId != b.segmentId) break
-            // 时间窗口剪枝：当段「较新点」距最新点 > 窗口，且已经凑够最少段，则停
-            if (segments.size >= DERIVED_MIN_SEGMENTS && newestMono - monoOrTimestamp(b) > DERIVED_WINDOW_MS) {
+            // 时间窗是硬边界；段数不足时宁可返回单段/无导数，也不能复用断线前的旧速度。
+            if (newestMono - monoOrTimestamp(b) > DERIVED_WINDOW_MS) {
                 break
             }
             segmentSpeedMps(a, b)?.let { v ->
@@ -222,12 +200,16 @@ object SpeedEstimator {
     private fun segmentSpeedMps(a: GpsPoint, b: GpsPoint): Double? {
         if (a.segmentId != b.segmentId) return null
         val dtMs = monoDtMs(a, b)
-        if (dtMs < MIN_SEGMENT_DT_MS || dtMs > MAX_SEGMENT_GAP_MS) return null
+        if (dtMs < TrackingPolicy.MIN_DERIVED_SEGMENT_DT_MS ||
+            dtMs > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS
+        ) {
+            return null
+        }
         val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
         val minDist = max(MIN_SEGMENT_DISTANCE_BASE_M, max(a.accuracy, b.accuracy) * MIN_SEGMENT_DISTANCE_ACC_FACTOR)
         if (dist < minDist) return null
         val v = dist / (dtMs / 1000.0)
-        return if (v > MAX_PLAUSIBLE_SEGMENT_MPS) null else v
+        return if (v > TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS) null else v
     }
 
     private fun monoDtMs(a: GpsPoint, b: GpsPoint): Long {
@@ -260,9 +242,10 @@ object SpeedEstimator {
     // -----------------------------------------------------------------
 
     private fun dopplerFusionWeight(point: GpsPoint, rawDopplerMps: Double, derived: Double?): Double {
+        if (!rawDopplerMps.isFinite() || rawDopplerMps !in 0.0..TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS) return 0.0
         if (rawDopplerMps < DOPPLER_MIN_MPS) return 0.0
         if (!point.isSpeedTrustworthy) return 0.0
-        if (point.accuracy > DOPPLER_MAX_ACCURACY_M) return 0.0
+        if (point.accuracy > TrackingPolicy.DOPPLER_MAX_ACCURACY_M) return 0.0
 
         // 1) 用 speedAccuracy 直接调权（API 26+）
         val accBased = when (val sa = point.speedAccuracyMps) {
@@ -311,7 +294,8 @@ object SpeedEstimator {
             alpha * instantMps + (1.0 - alpha) * previousDisplaySpeedMps
         }
         if (lastPoint == null) return ema.coerceAtLeast(0.0)
-        val dtMs = monoDtMs(lastPoint, newPoint).coerceAtLeast(MIN_SEGMENT_DT_MS)
+        val dtMs = monoDtMs(lastPoint, newPoint)
+            .coerceAtLeast(TrackingPolicy.MIN_DERIVED_SEGMENT_DT_MS)
         val dtSec = dtMs / 1000.0
         val maxUp = MAX_ACCEL_MPS2 * dtSec
         val maxDown = MAX_DECEL_MPS2 * dtSec

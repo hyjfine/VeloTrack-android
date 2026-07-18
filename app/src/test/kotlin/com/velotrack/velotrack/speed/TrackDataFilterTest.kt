@@ -25,6 +25,29 @@ class TrackDataFilterTest {
     }
 
     @Test
+    fun highSpeedLeg_marksModerateDetourAsSpike() {
+        val a = point(31.00000, 121.0, 0)
+        val b = point(31.00027, 121.0, 1)
+        val c = point(31.00018, 121.0, 2)
+
+        assertTrue(TrackDataFilter.isPositionSpike(a, b, c))
+    }
+
+    @Test
+    fun historicalSummary_usesPersistedMonotonicTimeAcrossWallClockRollback() {
+        val points = listOf(
+            point(31.00000, 121.0, 0).copy(timestamp = 2_000_000L),
+            point(31.00005, 121.0, 1).copy(timestamp = 1_000_000L),
+        )
+
+        val summary = TrackDataFilter.summarize(points)
+
+        assertTrue(summary.totalDistanceM > 2.0)
+        assertEquals(1.0, summary.movingDurationSec, 0.001)
+        assertEquals(1, TrackDataFilter.routeSegments(points).size)
+    }
+
+    @Test
     fun downsampleForMap_keepsBoundsAndLimit() {
         val points = (0 until 10_000).map { index ->
             point(31.0 + index * 0.000001, 121.0, index)

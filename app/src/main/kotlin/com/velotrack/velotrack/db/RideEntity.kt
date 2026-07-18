@@ -40,4 +40,6 @@ data class GpsPointEntity(
     val altitude: Double?,
     val accuracy: Double,
     val segmentId: Int,
+    /** 同一 segmentId 内有效的单调时间；跨段禁止比较。 */
+    val monotonicMs: Long,
 )

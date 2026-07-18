@@ -22,6 +22,7 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import com.velotrack.velotrack.tracking.TrackingPolicy
 
 class LocationTracker(
     context: Context,
@@ -40,6 +41,7 @@ class LocationTracker(
     private var amapClient: AMapLocationClient? = null
     private var platformFallbackStarted = false
     private var gnssCallbackRegistered = false
+    private val deliveryGate = LocationDeliveryGate()
 
     private val gnssCallback: GnssStatus.Callback =
             object : GnssStatus.Callback() {
@@ -97,13 +99,15 @@ class LocationTracker(
 
     private val gmsCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            result.lastLocation?.let {
-                val cached = !it.isFreshFix()
-                val msg = "GMS update prov=${it.provider} acc=${it.accuracyText()} spd=${it.speedText()} sacc=${it.speedAccuracyText()} cached=$cached"
+            val points = result.locations.map { location ->
+                val cached = !runningRecordingMode && !location.isFreshFix()
+                val msg = "GMS update prov=${location.provider} acc=${location.accuracyText()} " +
+                    "spd=${location.speedText()} sacc=${location.speedAccuracyText()} cached=$cached"
                 onDebugEvent(msg)
                 Log.d(TAG_LOC, msg)
-                onLocation(it.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = !cached, isCached = cached))
+                location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = !cached, isCached = cached)
             }
+            LocationDeliveryGate.order(points).forEach(::deliverPoint)
         }
     }
 
@@ -116,7 +120,7 @@ class LocationTracker(
             LocationManager.PASSIVE_PROVIDER -> GpsSource.PLATFORM_PASSIVE
             else -> GpsSource.UNKNOWN
         }
-        onLocation(
+        deliverPoint(
             location.toGpsPoint(
                 source,
                 isGpsFix = source == GpsSource.PLATFORM_GPS && !cached,
@@ -129,7 +133,7 @@ class LocationTracker(
         if (location == null) return@AMapLocationListener
         if (location.errorCode == AMapLocation.LOCATION_SUCCESS) {
             onDebugEvent("AMap type=${location.locationType} coord=${location.coordType} acc=${location.accuracyText()}")
-            onLocation(location.toGpsPoint())
+            deliverPoint(location.toGpsPoint())
         } else {
             val message = "AMap failed code=${location.errorCode} ${location.errorInfo.orEmpty()}"
             Log.w("VeloTrack", message)
@@ -194,23 +198,25 @@ class LocationTracker(
             fusedClient.lastLocation.addOnSuccessListener { location ->
                 if (location != null && location.isRecentEnough()) {
                     onDebugEvent("GMS last acc=${location.accuracyText()}")
-                    onLocation(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = false, isCached = true))
+                    deliverPoint(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = false, isCached = true))
                 }
             }
         }
-        currentLocationToken = CancellationTokenSource().also { tokenSource ->
-            fusedClient.getCurrentLocation(
-                CurrentLocationRequest.Builder()
-                    .setPriority(if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-                    .setMaxUpdateAgeMillis(if (recordingMode) 0L else RECENT_LOCATION_MAX_AGE_MS)
-                    .setDurationMillis(CURRENT_LOCATION_TIMEOUT_MS)
-                    .build(),
-                tokenSource.token,
-            ).addOnSuccessListener { location ->
-                if (location != null) {
-                    val cached = !location.isFreshFix()
-                    onDebugEvent("GMS current acc=${location.accuracyText()} cached=$cached")
-                    onLocation(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = !cached, isCached = cached))
+        if (!recordingMode) {
+            currentLocationToken = CancellationTokenSource().also { tokenSource ->
+                fusedClient.getCurrentLocation(
+                    CurrentLocationRequest.Builder()
+                        .setPriority(if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+                        .setMaxUpdateAgeMillis(RECENT_LOCATION_MAX_AGE_MS)
+                        .setDurationMillis(CURRENT_LOCATION_TIMEOUT_MS)
+                        .build(),
+                    tokenSource.token,
+                ).addOnSuccessListener { location ->
+                    if (location != null) {
+                        val cached = !location.isFreshFix()
+                        onDebugEvent("GMS current acc=${location.accuracyText()} cached=$cached")
+                        deliverPoint(location.toGpsPoint(GpsSource.GMS_FUSED, isGpsFix = !cached, isCached = cached))
+                    }
                 }
             }
         }
@@ -231,7 +237,7 @@ class LocationTracker(
                 if (!recordingMode) {
                     client.getLastKnownLocation()?.takeIf { it.isRecentEnough() }?.let {
                         onDebugEvent("AMap last type=${it.locationType} acc=${it.accuracyText()}")
-                        onLocation(it.toGpsPoint(forceCached = true))
+                        deliverPoint(it.toGpsPoint(forceCached = true))
                     }
                 }
                 client.startLocation()
@@ -321,8 +327,16 @@ class LocationTracker(
                     else -> GpsSource.UNKNOWN
                 }
                 // last-known 不算实时，速度不参与跟踪。
-                onLocation(it.toGpsPoint(source, isGpsFix = false, isCached = true))
+                deliverPoint(it.toGpsPoint(source, isGpsFix = false, isCached = true))
             }
+    }
+
+    private fun deliverPoint(point: GpsPoint) {
+        if (deliveryGate.accept(point)) {
+            onLocation(point)
+        } else {
+            onDebugEvent("drop duplicate/out-of-order fix mono=${point.fixMonotonicMs}")
+        }
     }
 
     private fun Location.isRecentEnough(): Boolean =
@@ -348,8 +362,12 @@ class LocationTracker(
     }
 
     private fun Location.trustworthyGnssSpeed(): Boolean {
-        if (!hasSpeed() || speed <= 0f) return false
-        if (!hasAccuracy() || accuracy > 15f) return false
+        if (!hasSpeed() || !speed.isFinite() || speed < 0f ||
+            speed > TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS.toFloat()
+        ) {
+            return false
+        }
+        if (!hasAccuracy() || accuracy > TrackingPolicy.DOPPLER_MAX_ACCURACY_M) return false
         if (hasSpeedAccuracy()) {
             if (speedAccuracyMetersPerSecond > 2.5f) return false
         }
@@ -361,9 +379,9 @@ class LocationTracker(
         }
     }
 
-    private fun Location.monotonicMsOrNow(): Long {
+    private fun Location.fixMonotonicMsOrZero(): Long {
         val nanos = elapsedRealtimeNanos
-        return if (nanos > 0L) nanos / 1_000_000L else SystemClock.elapsedRealtime()
+        return if (nanos > 0L) nanos / 1_000_000L else 0L
     }
 
     private fun Location.speedAccuracyOrNull(): Double? {
@@ -376,6 +394,7 @@ class LocationTracker(
         isCached: Boolean = false,
     ): GpsPoint {
         val receivedAt = SystemClock.elapsedRealtime()
+        val fixMonotonicMs = fixMonotonicMsOrZero()
         val positionFix = isGpsFix ?: (!isCached &&
             (source == GpsSource.GMS_FUSED || source == GpsSource.PLATFORM_GPS))
         return GpsPoint(
@@ -387,7 +406,8 @@ class LocationTracker(
             accuracy = if (hasAccuracy()) accuracy.toDouble() else 0.0,
             source = source,
             isGpsFix = positionFix,
-            monotonicMs = monotonicMsOrNow(),
+            monotonicMs = fixMonotonicMs.takeIf { it > 0L } ?: receivedAt,
+            fixMonotonicMs = fixMonotonicMs,
             speedAccuracyMps = speedAccuracyOrNull(),
             isSpeedTrustworthy = positionFix && !isCached && trustworthyGnssSpeed(),
             isCached = isCached,
@@ -429,8 +449,11 @@ class LocationTracker(
             isGpsFix = isGpsFix,
             // AMapLocation 没暴露 elapsedRealtimeNanos；用回调时刻近似（仍单调），优于 time 字段。
             monotonicMs = receivedAt,
+            fixMonotonicMs = 0L,
             speedAccuracyMps = null,
-            isSpeedTrustworthy = isGpsFix && hasSpeed() && hasAccuracy() && accuracy in 0.1f..15f,
+            isSpeedTrustworthy = isGpsFix && hasSpeed() && speed.isFinite() &&
+                speed in 0f..TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS.toFloat() &&
+                hasAccuracy() && accuracy in 0.1f..TrackingPolicy.DOPPLER_MAX_ACCURACY_M.toFloat(),
             isCached = isCached,
             receivedMonotonicMs = receivedAt,
         )

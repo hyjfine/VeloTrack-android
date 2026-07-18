@@ -80,6 +80,40 @@ class AppDatabaseMigrationTest {
         db.close()
     }
 
+    @Test
+    fun migrate4To5_addsMonotonicTimeWithoutLosingPoint() {
+        helper.createDatabase(TEST_DB, 4).apply {
+            execSQL(
+                """
+                INSERT INTO rides
+                (id, title, startTime, endTime, totalDistance, avgSpeed, maxSpeed, movingDurationSec)
+                VALUES ('ride-1', 'Test', 1000, 61000, 1000.0, 5.0, 8.0, 60.0)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO gps_points
+                (rideId, pointIndex, lat, lng, timestamp, speedMps, altitude, accuracy, segmentId)
+                VALUES ('ride-1', 0, 31.0, 121.0, 1000, 5.0, NULL, 3.0, 0)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            TEST_DB,
+            5,
+            true,
+            AppDatabase.MIGRATION_4_5,
+        )
+        db.query("SELECT rideId, monotonicMs FROM gps_points").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("ride-1", cursor.getString(0))
+            assertEquals(0L, cursor.getLong(1))
+        }
+        db.close()
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

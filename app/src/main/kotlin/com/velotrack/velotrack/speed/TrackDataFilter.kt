@@ -2,6 +2,7 @@ package com.velotrack.velotrack.speed
 
 import com.velotrack.velotrack.GeoUtils
 import com.velotrack.velotrack.GpsPoint
+import com.velotrack.velotrack.tracking.TrackingPolicy
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -31,10 +32,8 @@ import kotlin.math.min
 object TrackDataFilter {
 
     /** 与 SpeedEstimator 一致：约 90 km/h。 */
-    const val MAX_PLAUSIBLE_SPEED_MPS = 25.0
+    const val MAX_PLAUSIBLE_SPEED_MPS = TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS
 
-    private const val MAX_SEGMENT_GAP_MS = 10_000L
-    private const val MIN_SEGMENT_DT_MS = 700L
     private const val MIN_SEGMENT_DISTANCE_BASE_M = 2.0
     private const val MIN_SEGMENT_DISTANCE_ACC_FACTOR = 0.3
 
@@ -80,6 +79,12 @@ object TrackDataFilter {
         val speedMps: Double,
     )
 
+    private data class IndexedValidSegment(
+        val fromIndex: Int,
+        val toIndex: Int,
+        val value: ValidSegment,
+    )
+
     /**
      * 录制时与最近已入库点比对，返回丢弃原因；null 表示位置合理。
      *
@@ -90,7 +95,7 @@ object TrackDataFilter {
         val previous = recentAccepted.last()
         val dist = GeoUtils.haversineMeters(previous.lat, previous.lng, candidate.lat, candidate.lng)
         val dtMs = segmentDtMs(previous, candidate)
-        if (dtMs > 0L && dtMs <= MAX_SEGMENT_GAP_MS) {
+        if (dtMs > 0L && dtMs <= TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS) {
             val speed = dist / (dtMs / 1000.0)
             if (speed > MAX_PLAUSIBLE_SPEED_MPS) {
                 return "outlier: speed>${MAX_PLAUSIBLE_SPEED_MPS.toInt()}m/s"
@@ -163,7 +168,7 @@ object TrackDataFilter {
         } else {
             points.filterIndexed { index, _ -> index !in spikes }
         }
-        val totalDistance = validSegmentDistances(points, spikes).sum()
+        val totalDistance = validSegmentsAfterSpikeRemoval(points, spikes).sumOf { it.value.distanceM }
         return DisplaySnapshot(
             points = displayPoints,
             totalDistanceM = totalDistance,
@@ -188,13 +193,16 @@ object TrackDataFilter {
             return Summary(0.0, 0.0, 0.0, 0.0, emptyList(), 0)
         }
         val spikes = spikeIndices(points)
-        val segmentSpeeds = validSegmentSpeeds(points, spikes)
-        val totalDistance = validSegmentDistances(points, spikes).sum()
-        val movingMs = validMovingDurationMs(points, spikes)
+        val segments = validSegmentsAfterSpikeRemoval(points, spikes)
+        val segmentSpeeds = segments.map { it.value.speedMps }
+        val totalDistance = segments.sumOf { it.value.distanceM }
+        val movingMs = segments
+            .filter { it.value.speedMps > SpeedEstimator.STANDSTILL_SPEED_MPS }
+            .sumOf { it.value.dtMs }
         val avgSpeed = if (movingMs > 0L) totalDistance / (movingMs / 1000.0) else 0.0
         val maxSpeed = robustMaxSpeed(segmentSpeeds)
         val chartSpeeds = medianFilterBySegment(
-            values = sanitizePointSpeeds(points, spikes),
+            values = sanitizePointSpeeds(points, spikes, segments),
             points = points,
             spikes = spikes,
             window = CHART_MEDIAN_WINDOW,
@@ -233,8 +241,9 @@ object TrackDataFilter {
         if (detour < SPIKE_MIN_DETOUR_M) return false
         val pathRatio = if (dAc < 1.0) detour / max(dAc, 1.0) else detour / dAc
         if (pathRatio < SPIKE_PATH_RATIO) return false
-        val vAb = segmentSpeedMps(a, b)
-        val vBc = segmentSpeedMps(b, c)
+        // 尖峰判定必须使用未应用速度上限的原始段速，否则超速段会先变成 null。
+        val vAb = rawSegmentSpeedMps(a, b)
+        val vBc = rawSegmentSpeedMps(b, c)
         return (vAb != null && vAb > MAX_PLAUSIBLE_SPEED_MPS) ||
             (vBc != null && vBc > MAX_PLAUSIBLE_SPEED_MPS) ||
             pathRatio >= SPIKE_PATH_RATIO + 0.5
@@ -244,34 +253,27 @@ object TrackDataFilter {
     // 有效段
     // -----------------------------------------------------------------
 
-    private fun validSegmentSpeeds(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
-        return validSegmentsAfterSpikeRemoval(points, spikes).map { it.speedMps }
-    }
-
-    private fun validSegmentDistances(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
-        return validSegmentsAfterSpikeRemoval(points, spikes).map { it.distanceM }
-    }
-
     /** 与实时累计距离相同的段有效性口径。 */
     fun validSegmentDistanceMeters(a: GpsPoint, b: GpsPoint): Double? {
         return validSegment(a, b)?.distanceM
     }
 
-    private fun validMovingDurationMs(points: List<GpsPoint>, spikes: Set<Int>): Long {
-        return validSegmentsAfterSpikeRemoval(points, spikes)
-            .filter { it.speedMps > SpeedEstimator.STANDSTILL_SPEED_MPS }
-            .sumOf { it.dtMs }
-    }
-
     /** 剔除尖峰后重新连接相邻有效点，避免 A→B→C 中移除 B 时漏掉真实的 A→C。 */
-    private fun validSegmentsAfterSpikeRemoval(points: List<GpsPoint>, spikes: Set<Int>): List<ValidSegment> {
+    private fun validSegmentsAfterSpikeRemoval(
+        points: List<GpsPoint>,
+        spikes: Set<Int>,
+    ): List<IndexedValidSegment> {
         if (points.size < 2) return emptyList()
-        val out = ArrayList<ValidSegment>(points.size - 1)
-        var previous: GpsPoint? = null
+        val out = ArrayList<IndexedValidSegment>(points.size - 1)
+        var previousIndex: Int? = null
         points.forEachIndexed { index, point ->
             if (index in spikes) return@forEachIndexed
-            previous?.let { validSegment(it, point)?.let(out::add) }
-            previous = point
+            previousIndex?.let { fromIndex ->
+                validSegment(points[fromIndex], point)?.let { segment ->
+                    out += IndexedValidSegment(fromIndex, index, segment)
+                }
+            }
+            previousIndex = index
         }
         return out
     }
@@ -280,10 +282,26 @@ object TrackDataFilter {
         return validSegment(a, b)?.speedMps
     }
 
+    private fun rawSegmentSpeedMps(a: GpsPoint, b: GpsPoint): Double? {
+        if (a.segmentId != b.segmentId) return null
+        val dtMs = segmentDtMs(a, b)
+        if (dtMs < TrackingPolicy.MIN_DERIVED_SEGMENT_DT_MS ||
+            dtMs > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS
+        ) {
+            return null
+        }
+        val distanceM = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
+        return distanceM / (dtMs / 1000.0)
+    }
+
     private fun validSegment(a: GpsPoint, b: GpsPoint): ValidSegment? {
         if (a.segmentId != b.segmentId) return null
         val dtMs = segmentDtMs(a, b)
-        if (dtMs < MIN_SEGMENT_DT_MS || dtMs > MAX_SEGMENT_GAP_MS) return null
+        if (dtMs < TrackingPolicy.MIN_DERIVED_SEGMENT_DT_MS ||
+            dtMs > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS
+        ) {
+            return null
+        }
         val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
         val minDist = max(
             MIN_SEGMENT_DISTANCE_BASE_M,
@@ -298,7 +316,7 @@ object TrackDataFilter {
     private fun isRouteBreak(a: GpsPoint, b: GpsPoint): Boolean {
         if (a.segmentId != b.segmentId) return true
         val dtMs = segmentDtMs(a, b)
-        if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) return true
+        if (dtMs <= 0L || dtMs > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS) return true
         val distanceM = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
         return distanceM / (dtMs / 1000.0) > MAX_PLAUSIBLE_SPEED_MPS
     }
@@ -314,20 +332,18 @@ object TrackDataFilter {
     // 逐点速度清洗 + 图表
     // -----------------------------------------------------------------
 
-    private fun sanitizePointSpeeds(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
+    private fun sanitizePointSpeeds(
+        points: List<GpsPoint>,
+        spikes: Set<Int>,
+        segments: List<IndexedValidSegment>,
+    ): List<Double> {
         if (points.isEmpty()) return emptyList()
         val derived = DoubleArray(points.size) { Double.NaN }
-        var previousIndex: Int? = null
-        points.indices.forEach { index ->
-            if (index in spikes) return@forEach
-            previousIndex?.let { previous ->
-                segmentSpeedMps(points[previous], points[index])?.let { speed ->
-                    // 后一个点先取上一段；其下一段有效时会再被前向速度覆盖。
-                    if (derived[index].isNaN()) derived[index] = speed
-                    derived[previous] = speed
-                }
-            }
-            previousIndex = index
+        segments.forEach { segment ->
+            val speed = segment.value.speedMps
+            // 后一个点先取上一段；其下一段有效时会再被前向速度覆盖。
+            if (derived[segment.toIndex].isNaN()) derived[segment.toIndex] = speed
+            derived[segment.fromIndex] = speed
         }
         return List(points.size) { i ->
             if (i in spikes) return@List 0.0
