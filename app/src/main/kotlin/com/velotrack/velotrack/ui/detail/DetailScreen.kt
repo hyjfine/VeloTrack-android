@@ -54,6 +54,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.velotrack.velotrack.ui.VeloColors
+import com.velotrack.velotrack.speed.TrackDataFilter
 import com.velotrack.velotrack.ui.VeloDimens
 import com.velotrack.velotrack.ui.VeloGlassSurface
 import com.velotrack.velotrack.ui.rememberTapFeedback
@@ -75,6 +76,9 @@ fun DetailScreen(
 ) {
     val scroll = rememberScrollState()
     var isMapTouching by remember { mutableStateOf(false) }
+    val mapPoints = remember(ride.id, ride.points.size) {
+        TrackDataFilter.filterForDisplay(ride.points)
+    }
     Column(
         modifier
             .fillMaxSize()
@@ -84,7 +88,7 @@ fun DetailScreen(
         Box(Modifier.fillMaxWidth().height(320.dp)) {
             MapPane(
                 provider = provider,
-                points = ride.points,
+                points = mapPoints,
                 modifier = Modifier.fillMaxSize(),
                 followLatestPosition = false,
                 mapZoom = 14f,

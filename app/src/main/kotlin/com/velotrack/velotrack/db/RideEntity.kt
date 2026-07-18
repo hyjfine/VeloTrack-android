@@ -39,4 +39,5 @@ data class GpsPointEntity(
     val speedMps: Double,
     val altitude: Double?,
     val accuracy: Double,
+    val segmentId: Int,
 )

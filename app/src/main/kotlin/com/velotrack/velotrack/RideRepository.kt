@@ -85,6 +85,35 @@ class RideRepository(
             entityToRide(entity)
         }
 
+    /** 一次性重算旧骑行：切断不可能跨段，并同步修复持久化摘要。 */
+    fun repairHistoricalRides(): Int {
+        var repaired = 0
+        dao.getAllBlocking().forEach { entity ->
+            val original = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
+            if (original.isEmpty()) return@forEach
+            val normalized = TrackDataFilter.withInferredSegments(original)
+            val stats = TrackDataFilter.summarize(normalized)
+            val segmentChanged = original.indices.any { original[it].segmentId != normalized[it].segmentId }
+            val summaryChanged = entity.totalDistance != stats.totalDistanceM ||
+                entity.avgSpeed != stats.avgSpeedMps ||
+                entity.maxSpeed != stats.maxSpeedMps ||
+                entity.movingDurationSec != stats.movingDurationSec
+            if (segmentChanged || summaryChanged) {
+                dao.saveRideWithPointsBlocking(
+                    entity.copy(
+                        totalDistance = stats.totalDistanceM,
+                        avgSpeed = stats.avgSpeedMps,
+                        maxSpeed = stats.maxSpeedMps,
+                        movingDurationSec = stats.movingDurationSec,
+                    ),
+                    normalized.mapIndexed { index, point -> pointToEntity(entity.id, index, point) },
+                )
+                repaired++
+            }
+        }
+        return repaired
+    }
+
     private fun entityToRide(entity: RideEntity): Ride {
         val points = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
         val stats = if (points.isNotEmpty()) TrackDataFilter.summarize(points) else null
@@ -133,6 +162,7 @@ class RideRepository(
             speedMps = point.speedMps,
             altitude = point.altitude,
             accuracy = point.accuracy,
+            segmentId = point.segmentId,
         )
 
     private fun pointEntityToModel(entity: GpsPointEntity): GpsPoint =
@@ -143,5 +173,6 @@ class RideRepository(
             speedMps = entity.speedMps,
             altitude = entity.altitude,
             accuracy = entity.accuracy,
+            segmentId = entity.segmentId,
         )
 }

@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.compose.runtime.Immutable
+import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -18,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -91,6 +94,7 @@ class TrackViewModel(
     private var detailLoadJob: Job? = null
     private var activeAnalysisRequestId: String? = null
     private val analysisCache = mutableMapOf<String, String>()
+    private val historicalRepairMutex = Mutex()
     var hasFineLocation: Boolean = true
         private set
 
@@ -301,8 +305,23 @@ class TrackViewModel(
 
     fun loadHistory() {
         viewModelScope.launch(Dispatchers.IO) {
+            repairHistoricalRidesIfNeeded()
             val rides = repo.listRides()
             _uiState.update { it.copy(history = rides) }
+        }
+    }
+
+    private suspend fun repairHistoricalRidesIfNeeded() {
+        historicalRepairMutex.withLock {
+            val app = getApplication<Application>()
+            val prefs = app.getSharedPreferences(DATA_REPAIR_PREFS, Application.MODE_PRIVATE)
+            if (prefs.getBoolean(KEY_TRACK_SEGMENT_REPAIR_V1, false)) return@withLock
+            runCatching { repo.repairHistoricalRides() }
+                .onSuccess { repairedCount ->
+                    prefs.edit { putBoolean(KEY_TRACK_SEGMENT_REPAIR_V1, true) }
+                    Log.i("VeloDB", "historical track repair complete rides=$repairedCount")
+                }
+                .onFailure { Log.e("VeloDB", "historical track repair failed", it) }
         }
     }
 
@@ -534,6 +553,8 @@ class TrackViewModel(
     companion object {
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
         private const val START_COUNTDOWN_SECONDS = 3
+        private const val DATA_REPAIR_PREFS = "data_repair"
+        private const val KEY_TRACK_SEGMENT_REPAIR_V1 = "track_segments_v1"
         private const val AI_LOG_TAG = "VeloAI"
 
         fun factory(application: Application, repo: RideRepository): ViewModelProvider.Factory =

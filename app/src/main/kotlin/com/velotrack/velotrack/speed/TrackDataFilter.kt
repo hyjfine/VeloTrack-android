@@ -74,6 +74,12 @@ object TrackDataFilter {
         val spikePointCount: Int,
     )
 
+    private data class ValidSegment(
+        val distanceM: Double,
+        val dtMs: Long,
+        val speedMps: Double,
+    )
+
     /**
      * 录制时与最近已入库点比对，返回丢弃原因；null 表示位置合理。
      *
@@ -99,6 +105,42 @@ object TrackDataFilter {
             return "outlier: jump>${thresholdM.toInt()}m"
         }
         return null
+    }
+
+    /**
+     * 地图绘制分段。显式 [GpsPoint.segmentId] 变化、时间断层或不可能速度均会断线。
+     * 这也能在不改写旧数据的前提下修复历史缓存首点造成的跨城连线。
+     */
+    fun routeSegments(points: List<GpsPoint>): List<List<GpsPoint>> {
+        if (points.isEmpty()) return emptyList()
+        val segments = mutableListOf<MutableList<GpsPoint>>()
+        var current = mutableListOf(points.first())
+        segments += current
+        for (i in 1 until points.size) {
+            val previous = points[i - 1]
+            val point = points[i]
+            if (isRouteBreak(previous, point)) {
+                current = mutableListOf()
+                segments += current
+            }
+            current += point
+        }
+        return segments
+    }
+
+    /** 将旧版平面点列中的不可能跨段固化为连续 segmentId，供一次性历史修复使用。 */
+    fun withInferredSegments(points: List<GpsPoint>): List<GpsPoint> {
+        if (points.isEmpty()) return emptyList()
+        val spikes = spikeIndices(points)
+        var segmentId = 0
+        return points.mapIndexed { index, point ->
+            if (index > 0 && index - 1 !in spikes && index !in spikes &&
+                isRouteBreak(points[index - 1], point)
+            ) {
+                segmentId++
+            }
+            point.copy(segmentId = segmentId)
+        }
     }
 
     fun rejectReasonForCandidate(previous: GpsPoint?, candidate: GpsPoint): String? =
@@ -151,7 +193,12 @@ object TrackDataFilter {
         val movingMs = validMovingDurationMs(points, spikes)
         val avgSpeed = if (movingMs > 0L) totalDistance / (movingMs / 1000.0) else 0.0
         val maxSpeed = robustMaxSpeed(segmentSpeeds)
-        val chartSpeeds = medianFilter(sanitizePointSpeeds(points, spikes), CHART_MEDIAN_WINDOW)
+        val chartSpeeds = medianFilterBySegment(
+            values = sanitizePointSpeeds(points, spikes),
+            points = points,
+            spikes = spikes,
+            window = CHART_MEDIAN_WINDOW,
+        )
         return Summary(
             totalDistanceM = totalDistance,
             movingDurationSec = movingMs / 1000.0,
@@ -178,6 +225,7 @@ object TrackDataFilter {
     }
 
     fun isPositionSpike(a: GpsPoint, b: GpsPoint, c: GpsPoint): Boolean {
+        if (a.segmentId != b.segmentId || b.segmentId != c.segmentId) return false
         val dAb = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
         val dBc = GeoUtils.haversineMeters(b.lat, b.lng, c.lat, c.lng)
         val dAc = GeoUtils.haversineMeters(a.lat, a.lng, c.lat, c.lng)
@@ -197,53 +245,43 @@ object TrackDataFilter {
     // -----------------------------------------------------------------
 
     private fun validSegmentSpeeds(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
-        if (points.size < 2) return emptyList()
-        val out = ArrayList<Double>(points.size - 1)
-        for (i in 1 until points.size) {
-            if (i - 1 in spikes || i in spikes) continue
-            segmentSpeedMps(points[i - 1], points[i])?.let { out.add(it) }
-        }
-        return out
+        return validSegmentsAfterSpikeRemoval(points, spikes).map { it.speedMps }
     }
 
     private fun validSegmentDistances(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
-        if (points.size < 2) return emptyList()
-        val out = ArrayList<Double>(points.size - 1)
-        for (i in 1 until points.size) {
-            if (i - 1 in spikes || i in spikes) continue
-            val a = points[i - 1]
-            val b = points[i]
-            val dtMs = segmentDtMs(a, b)
-            if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) continue
-            out.add(GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng))
-        }
-        return out
+        return validSegmentsAfterSpikeRemoval(points, spikes).map { it.distanceM }
     }
 
     /** 与实时累计距离相同的段有效性口径。 */
     fun validSegmentDistanceMeters(a: GpsPoint, b: GpsPoint): Double? {
-        val dtMs = segmentDtMs(a, b)
-        if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) return null
-        return GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
+        return validSegment(a, b)?.distanceM
     }
 
     private fun validMovingDurationMs(points: List<GpsPoint>, spikes: Set<Int>): Long {
-        if (points.size < 2) return 0L
-        var totalMs = 0L
-        for (i in 1 until points.size) {
-            if (i - 1 in spikes || i in spikes) continue
-            val a = points[i - 1]
-            val b = points[i]
-            val dtMs = segmentDtMs(a, b)
-            if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) continue
-            val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
-            val v = dist / (dtMs / 1000.0)
-            if (v > SpeedEstimator.STANDSTILL_SPEED_MPS) totalMs += dtMs
+        return validSegmentsAfterSpikeRemoval(points, spikes)
+            .filter { it.speedMps > SpeedEstimator.STANDSTILL_SPEED_MPS }
+            .sumOf { it.dtMs }
+    }
+
+    /** 剔除尖峰后重新连接相邻有效点，避免 A→B→C 中移除 B 时漏掉真实的 A→C。 */
+    private fun validSegmentsAfterSpikeRemoval(points: List<GpsPoint>, spikes: Set<Int>): List<ValidSegment> {
+        if (points.size < 2) return emptyList()
+        val out = ArrayList<ValidSegment>(points.size - 1)
+        var previous: GpsPoint? = null
+        points.forEachIndexed { index, point ->
+            if (index in spikes) return@forEachIndexed
+            previous?.let { validSegment(it, point)?.let(out::add) }
+            previous = point
         }
-        return totalMs
+        return out
     }
 
     fun segmentSpeedMps(a: GpsPoint, b: GpsPoint): Double? {
+        return validSegment(a, b)?.speedMps
+    }
+
+    private fun validSegment(a: GpsPoint, b: GpsPoint): ValidSegment? {
+        if (a.segmentId != b.segmentId) return null
         val dtMs = segmentDtMs(a, b)
         if (dtMs < MIN_SEGMENT_DT_MS || dtMs > MAX_SEGMENT_GAP_MS) return null
         val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
@@ -253,7 +291,16 @@ object TrackDataFilter {
         )
         if (dist < minDist) return null
         val v = dist / (dtMs / 1000.0)
-        return if (v > MAX_PLAUSIBLE_SPEED_MPS) null else v
+        if (v > MAX_PLAUSIBLE_SPEED_MPS) return null
+        return ValidSegment(distanceM = dist, dtMs = dtMs, speedMps = v)
+    }
+
+    private fun isRouteBreak(a: GpsPoint, b: GpsPoint): Boolean {
+        if (a.segmentId != b.segmentId) return true
+        val dtMs = segmentDtMs(a, b)
+        if (dtMs <= 0L || dtMs > MAX_SEGMENT_GAP_MS) return true
+        val distanceM = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
+        return distanceM / (dtMs / 1000.0) > MAX_PLAUSIBLE_SPEED_MPS
     }
 
     private fun segmentDtMs(a: GpsPoint, b: GpsPoint): Long =
@@ -270,26 +317,26 @@ object TrackDataFilter {
     private fun sanitizePointSpeeds(points: List<GpsPoint>, spikes: Set<Int>): List<Double> {
         if (points.isEmpty()) return emptyList()
         val derived = DoubleArray(points.size) { Double.NaN }
-        for (i in 1 until points.size) {
-            if (i - 1 in spikes || i in spikes) continue
-            segmentSpeedMps(points[i - 1], points[i])?.let { derived[i] = it }
-        }
-        for (i in 0 until points.size - 1) {
-            if (i in spikes || i + 1 in spikes) continue
-            segmentSpeedMps(points[i], points[i + 1])?.let { derived[i] = it }
+        var previousIndex: Int? = null
+        points.indices.forEach { index ->
+            if (index in spikes) return@forEach
+            previousIndex?.let { previous ->
+                segmentSpeedMps(points[previous], points[index])?.let { speed ->
+                    // 后一个点先取上一段；其下一段有效时会再被前向速度覆盖。
+                    if (derived[index].isNaN()) derived[index] = speed
+                    derived[previous] = speed
+                }
+            }
+            previousIndex = index
         }
         return List(points.size) { i ->
             if (i in spikes) return@List 0.0
-            val fromSeg = when {
-                !derived[i].isNaN() -> derived[i]
-                i > 0 && !derived[i - 1].isNaN() -> derived[i - 1]
-                else -> null
-            }
-            val stored = points[i].speedMps
-            val candidate = fromSeg ?: stored
+            val fromSeg = derived[i].takeUnless(Double::isNaN)
+            // 历史数据没有持久化速度可信度；没有同段位移依据时不能继续采用旧 speedMps。
+            if (fromSeg == null) return@List 0.0
+            val stored = points[i].speedMps.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
             when {
-                candidate > MAX_PLAUSIBLE_SPEED_MPS -> fromSeg?.coerceAtMost(MAX_PLAUSIBLE_SPEED_MPS) ?: 0.0
-                fromSeg == null -> stored.coerceIn(0.0, MAX_PLAUSIBLE_SPEED_MPS)
+                fromSeg > MAX_PLAUSIBLE_SPEED_MPS -> 0.0
                 stored > MAX_PLAUSIBLE_SPEED_MPS -> fromSeg
                 fromSeg > 0.0 && abs(stored - fromSeg) / fromSeg > STORED_SPEED_MAX_RATIO -> fromSeg
                 else -> stored.coerceIn(0.0, MAX_PLAUSIBLE_SPEED_MPS)
@@ -297,11 +344,20 @@ object TrackDataFilter {
         }
     }
 
-    private fun medianFilter(values: List<Double>, window: Int): List<Double> {
+    private fun medianFilterBySegment(
+        values: List<Double>,
+        points: List<GpsPoint>,
+        spikes: Set<Int>,
+        window: Int,
+    ): List<Double> {
         if (values.isEmpty() || window <= 1) return values
         val half = window / 2
         return values.mapIndexed { i, _ ->
-            val slice = values.subList(max(0, i - half), min(values.size, i + half + 1)).sorted()
+            if (i in spikes) return@mapIndexed 0.0
+            val slice = (max(0, i - half) until min(values.size, i + half + 1))
+                .filter { index -> index !in spikes && points[index].segmentId == points[i].segmentId }
+                .map(values::get)
+                .sorted()
             slice[slice.size / 2]
         }
     }

@@ -18,6 +18,10 @@ class TrackDataFilterTest {
 
         assertEquals(1, snapshot.spikePointCount)
         assertEquals(listOf(points.first(), points.last()), snapshot.points)
+        assertTrue(snapshot.totalDistanceM in 2.0..5.0)
+
+        val summary = TrackDataFilter.summarize(points)
+        assertEquals(2.0, summary.movingDurationSec, 0.001)
     }
 
     @Test
@@ -31,6 +35,93 @@ class TrackDataFilterTest {
         assertTrue(result.size <= 2_000)
         assertEquals(points.first(), result.first())
         assertEquals(points.last(), result.last())
+    }
+
+    @Test
+    fun impossibleCrossCitySegment_isNeitherCountedNorConnected() {
+        val points = listOf(
+            point(31.0, 121.0, 0),
+            point(31.1, 121.1, 1),
+            point(31.10003, 121.1, 2),
+        )
+
+        val summary = TrackDataFilter.summarize(points)
+        val segments = TrackDataFilter.routeSegments(points)
+
+        assertTrue(summary.totalDistanceM < 10.0)
+        assertEquals(2, segments.size)
+        assertEquals(1, segments.first().size)
+        assertEquals(2, segments.last().size)
+    }
+
+    @Test
+    fun explicitSegmentBoundary_isNotCountedOrConnected() {
+        val points = listOf(
+            point(31.0, 121.0, 0).copy(segmentId = 0),
+            point(31.00003, 121.0, 1).copy(segmentId = 0),
+            point(31.00100, 121.0, 2).copy(segmentId = 1),
+            point(31.00103, 121.0, 3).copy(segmentId = 1),
+        )
+
+        val summary = TrackDataFilter.summarize(points)
+
+        assertTrue(summary.totalDistanceM < 10.0)
+        assertEquals(2, TrackDataFilter.routeSegments(points).size)
+    }
+
+    @Test
+    fun routeSegments_keepsSingletonActiveSegmentForCurrentPosition() {
+        val points = listOf(
+            point(31.00000, 121.00000, 0).copy(segmentId = 0),
+            point(31.00003, 121.00000, 1).copy(segmentId = 0),
+            point(31.10000, 121.10000, 2).copy(segmentId = 1),
+        )
+
+        val segments = TrackDataFilter.routeSegments(points)
+
+        assertEquals(2, segments.size)
+        assertEquals(listOf(points.last()), segments.last())
+    }
+
+    @Test
+    fun isolatedSegmentPoint_doesNotKeepOrSpreadStoredSpeed() {
+        val points = listOf(
+            point(31.0, 121.0, 0).copy(segmentId = 0, speedMps = 20.0),
+            point(31.10000, 121.10000, 1).copy(segmentId = 1, speedMps = 5.0),
+            point(31.10005, 121.10000, 2).copy(segmentId = 1, speedMps = 5.0),
+        )
+
+        val chart = TrackDataFilter.summarize(points).chartSpeedMps
+
+        assertEquals(0.0, chart.first(), 0.001)
+        assertTrue(chart.drop(1).all { it < 10.0 })
+    }
+
+    @Test
+    fun withInferredSegments_persistsLegacyImpossibleJumpAsBoundary() {
+        val original = listOf(
+            point(31.0, 121.0, 0),
+            point(31.1, 121.1, 1),
+            point(31.10003, 121.1, 2),
+        )
+
+        val normalized = TrackDataFilter.withInferredSegments(original)
+
+        assertEquals(listOf(0, 1, 1), normalized.map { it.segmentId })
+    }
+
+    @Test
+    fun withInferredSegments_doesNotTurnIsolatedSpikeIntoPermanentBreaks() {
+        val original = listOf(
+            point(31.00000, 121.00000, 0),
+            point(31.00045, 121.00045, 1),
+            point(31.00002, 121.00002, 2),
+        )
+
+        val normalized = TrackDataFilter.withInferredSegments(original)
+
+        assertEquals(listOf(0, 0, 0), normalized.map { it.segmentId })
+        assertEquals(listOf(normalized.first(), normalized.last()), TrackDataFilter.filterForDisplay(normalized))
     }
 
     private fun point(lat: Double, lng: Double, second: Int): GpsPoint =

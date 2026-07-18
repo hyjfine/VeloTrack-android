@@ -11,6 +11,7 @@ import com.velotrack.velotrack.speed.TrackDataFilter
  */
 object RecordingLocationProcessor {
     private const val TRACK_POINT_MAX_ACCURACY_M = 20.0
+    private const val TRACK_POINT_MIN_ACCURACY_M = 0.1
     /** 迟滞恢复期间仅用 GNSS Doppler 估速的精度上限（与 SpeedEstimator 一致）。 */
     private const val SPEED_DOPPLER_ONLY_MAX_ACCURACY_M = 15.0
     private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
@@ -20,22 +21,46 @@ object RecordingLocationProcessor {
     private const val SIGNAL_RECOVERY_REQUIRED_COUNT = 3
     /** 连续野点拒绝达到此值后强制重锚，打破锚点死亡螺旋。 */
     private const val OUTLIER_REANCHOR_COUNT = 3
+    /** 首点也需连续稳定，避免单个伪装成 GPS 的缓存点成为整段锚点。 */
+    private const val INITIAL_ANCHOR_REQUIRED_COUNT = 3
+    private const val CALLBACK_MAX_AGE_MS = 5_000L
+    private const val FUTURE_TIMESTAMP_TOLERANCE_MS = 10_000L
 
     data class Result(
         val state: RecordingSessionState,
-        val acceptedPoint: GpsPoint? = null,
+        val acceptedPoints: List<GpsPoint> = emptyList(),
     )
 
     fun apply(
         state: RecordingSessionState,
         point: GpsPoint,
         recordingStartAt: Long,
+        recordingStartMonotonicMs: Long = 0L,
         isRecording: Boolean,
         isPaused: Boolean,
         segmentStartIndex: Int = 0,
     ): Result {
         val rawSpeed = point.speedMps
         val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
+
+        val freshnessDropReason = freshnessDropReason(point, recordingStartAt, recordingStartMonotonicMs)
+        if (freshnessDropReason != null) {
+            return Result(
+                state.copy(
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = freshnessDropReason,
+                    lastRawSpeedMps = rawSpeed,
+                    lastDerivedSpeedMps = null,
+                    lastSpeedSource = speedSourceLabel,
+                    lastSpeedMethod = null,
+                    pendingAnchorPoint = if (state.livePoints.isEmpty()) null else state.pendingAnchorPoint,
+                    pendingAnchorPoints = if (state.livePoints.isEmpty()) emptyList() else state.pendingAnchorPoints,
+                    consecutiveAnchorCandidateCount = if (state.livePoints.isEmpty()) 0 else state.consecutiveAnchorCandidateCount,
+                ),
+            )
+        }
 
         if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) {
             return Result(
@@ -48,6 +73,9 @@ object RecordingLocationProcessor {
                     lastDerivedSpeedMps = null,
                     lastSpeedSource = speedSourceLabel,
                     lastSpeedMethod = null,
+                    pendingAnchorPoint = if (state.livePoints.isEmpty()) null else state.pendingAnchorPoint,
+                    pendingAnchorPoints = if (state.livePoints.isEmpty()) emptyList() else state.pendingAnchorPoints,
+                    consecutiveAnchorCandidateCount = if (state.livePoints.isEmpty()) 0 else state.consecutiveAnchorCandidateCount,
                 ),
             )
         }
@@ -70,28 +98,20 @@ object RecordingLocationProcessor {
             )
         }
 
-        if (point.timestamp < recordingStartAt) {
-            return Result(
-                state.copy(
-                    lastLocationAtMs = point.timestamp,
-                    lastLocationAccuracyM = point.accuracy,
-                    lastLocationCountedInTrack = false,
-                    lastLocationDropReason = "before recording start",
-                    mapCenterLat = point.lat,
-                    mapCenterLng = point.lng,
-                    currentAltitude = point.altitude,
-                    lastRawSpeedMps = rawSpeed,
-                    lastDerivedSpeedMps = null,
-                    lastSpeedSource = speedSourceLabel,
-                    lastSpeedMethod = null,
-                ),
-            )
-        }
-
-        val meetsAccuracy = point.accuracy <= TRACK_POINT_MAX_ACCURACY_M
+        val meetsAccuracy = point.accuracy in TRACK_POINT_MIN_ACCURACY_M..TRACK_POINT_MAX_ACCURACY_M
         val meetsSource = point.isTrustworthyTrackSource()
         val frameGood = meetsAccuracy && meetsSource
         val frameBad = !frameGood
+
+        val pointForCurrentSegment = point.copy(segmentId = state.currentSegmentId)
+        if (state.livePoints.isEmpty() && frameGood) {
+            return applyInitialAnchorCandidate(
+                state = state,
+                point = pointForCurrentSegment,
+                rawSpeed = rawSpeed,
+                speedSourceLabel = speedSourceLabel,
+            )
+        }
 
         val nextConsecutiveBadGpsCount = when {
             frameGood -> 0
@@ -111,13 +131,17 @@ object RecordingLocationProcessor {
             consecutiveGoodGpsCount >= SIGNAL_RECOVERY_REQUIRED_COUNT
 
         val trackOutlierReason = if (frameGood) {
-            TrackDataFilter.rejectReasonForCandidate(state.livePoints, point)
+            TrackDataFilter.rejectReasonForCandidate(state.livePoints, pointForCurrentSegment)
         } else {
             null
         }
+        val consistentWithPendingOutlier = state.pendingOutlierPoint?.let {
+            TrackDataFilter.rejectReasonForCandidate(it, pointForCurrentSegment) == null
+        } ?: true
         val nextConsecutiveTrackOutlierCount = when {
             !frameGood || !recoverySatisfied || trackOutlierReason == null -> 0
-            else -> state.consecutiveTrackOutlierCount + 1
+            consistentWithPendingOutlier -> state.consecutiveTrackOutlierCount + 1
+            else -> 1
         }
         val forceReanchor = frameGood && recoverySatisfied &&
             trackOutlierReason != null &&
@@ -129,38 +153,44 @@ object RecordingLocationProcessor {
         }
 
         val canUseForTrack = frameGood && recoverySatisfied && outlierReason == null
+        val candidateForTrack = if (forceReanchor) {
+            pointForCurrentSegment.copy(segmentId = state.currentSegmentId + 1)
+        } else {
+            pointForCurrentSegment
+        }
+        val speedSegmentStartIndex = if (forceReanchor) state.livePoints.size else segmentStartIndex
 
         // 仪表速度与轨迹入库解耦：野点不入库但仍可估速；迟滞恢复期间避免未入库点污染位移导数。
         val speedEstimate = when {
             !frameGood -> null
             canUseForTrack -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = state.livePoints + point,
-                newPoint = point,
+                trackPointsIncludingNew = state.livePoints + candidateForTrack,
+                newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
-                segmentStartIndex = segmentStartIndex,
+                segmentStartIndex = speedSegmentStartIndex,
             )
             trackPausedForSignal && point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = listOf(point),
-                newPoint = point,
+                trackPointsIncludingNew = listOf(candidateForTrack),
+                newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = 0,
             )
             outlierReason != null -> SpeedEstimator.estimate(
                 trackPointsIncludingNew = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) {
-                    listOf(point)
+                    listOf(candidateForTrack)
                 } else {
                     state.livePoints
                 },
-                newPoint = point,
+                newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = if (point.accuracy <= SPEED_DOPPLER_ONLY_MAX_ACCURACY_M) 0 else segmentStartIndex,
             )
             else -> SpeedEstimator.estimate(
-                trackPointsIncludingNew = state.livePoints + point,
-                newPoint = point,
+                trackPointsIncludingNew = state.livePoints + candidateForTrack,
+                newPoint = candidateForTrack,
                 previousDisplaySpeedMps = state.currentSpeedMps,
                 rawDopplerMps = rawSpeed,
                 segmentStartIndex = segmentStartIndex,
@@ -169,7 +199,11 @@ object RecordingLocationProcessor {
 
         val nextSpeed = speedEstimate?.displaySpeedMps ?: state.currentSpeedMps
         val dropReason = when {
-            !meetsAccuracy -> "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
+            !meetsAccuracy -> if (point.accuracy < TRACK_POINT_MIN_ACCURACY_M) {
+                "map only: accuracy unknown"
+            } else {
+                "map only: accuracy>${TRACK_POINT_MAX_ACCURACY_M.toInt()}m"
+            }
             !meetsSource -> "map only: source=${point.source.label}"
             enteringPause -> "signal pause: degraded"
             !state.trackPausedForSignal && nextConsecutiveBadGpsCount > 0 ->
@@ -182,7 +216,7 @@ object RecordingLocationProcessor {
         }
 
         val acceptedPoint = if (canUseForTrack) {
-            point.copy(speedMps = speedEstimate!!.instantSpeedMps)
+            candidateForTrack.copy(speedMps = speedEstimate!!.instantSpeedMps)
         } else {
             null
         }
@@ -222,6 +256,15 @@ object RecordingLocationProcessor {
                 mapPoints = displayUpdate?.mapPoints ?: state.mapPoints,
                 displayDistanceM = displayUpdate?.distanceM ?: state.displayDistanceM,
                 spikePointIndices = displayUpdate?.spikeIndices ?: state.spikePointIndices,
+                currentSegmentId = if (forceReanchor) state.currentSegmentId + 1 else state.currentSegmentId,
+                pendingAnchorPoint = null,
+                pendingAnchorPoints = emptyList(),
+                consecutiveAnchorCandidateCount = 0,
+                pendingOutlierPoint = if (trackOutlierReason != null && !forceReanchor) {
+                    pointForCurrentSegment
+                } else {
+                    null
+                },
                 mapCenterLat = if (frameGood) point.lat else state.mapCenterLat,
                 mapCenterLng = if (frameGood) point.lng else state.mapCenterLng,
                 currentSpeedMps = nextSpeed.coerceAtLeast(0.0),
@@ -244,7 +287,118 @@ object RecordingLocationProcessor {
                 lastSegmentDtMs = speedEstimate?.lastSegmentDtMs,
                 lastSegmentCount = speedEstimate?.segmentCount,
             ),
-            acceptedPoint = acceptedPoint,
+            acceptedPoints = listOfNotNull(acceptedPoint),
+        )
+    }
+
+    private fun freshnessDropReason(
+        point: GpsPoint,
+        recordingStartAt: Long,
+        recordingStartMonotonicMs: Long,
+    ): String? {
+        if (point.isCached) return "cached location"
+        val hasComparableMonotonicTime = recordingStartMonotonicMs > 0L && point.monotonicMs > 0L
+        if (hasComparableMonotonicTime) {
+            if (point.monotonicMs < recordingStartMonotonicMs) return "before active segment"
+        } else {
+            // Location.time 与系统壁钟都会受手动校时/NTP 回拨影响，仅在缺少单调时间时兜底。
+            if (point.timestamp < recordingStartAt) return "before recording start"
+            if (point.timestamp > System.currentTimeMillis() + FUTURE_TIMESTAMP_TOLERANCE_MS) {
+                return "future location timestamp"
+            }
+        }
+        if (recordingStartMonotonicMs > 0L && point.receivedMonotonicMs > 0L) {
+            val callbackAgeMs = android.os.SystemClock.elapsedRealtime() - point.receivedMonotonicMs
+            if (callbackAgeMs !in 0..CALLBACK_MAX_AGE_MS) return "stale callback"
+        }
+        return null
+    }
+
+    private fun applyInitialAnchorCandidate(
+        state: RecordingSessionState,
+        point: GpsPoint,
+        rawSpeed: Double,
+        speedSourceLabel: String,
+    ): Result {
+        val consistent = state.pendingAnchorPoints.lastOrNull()?.let {
+            TrackDataFilter.rejectReasonForCandidate(it, point) == null
+        } ?: true
+        val candidates = if (consistent) state.pendingAnchorPoints + point else listOf(point)
+        val candidateCount = candidates.size
+        if (candidateCount < INITIAL_ANCHOR_REQUIRED_COUNT) {
+            return Result(
+                state.copy(
+                    pendingAnchorPoint = point,
+                    pendingAnchorPoints = candidates,
+                    consecutiveAnchorCandidateCount = candidateCount,
+                    pendingOutlierPoint = null,
+                    consecutiveTrackOutlierCount = 0,
+                    mapCenterLat = point.lat,
+                    mapCenterLng = point.lng,
+                    currentAltitude = point.altitude,
+                    currentSpeedMps = 0.0,
+                    lastLocationAtMs = point.timestamp,
+                    lastLocationAccuracyM = point.accuracy,
+                    lastLocationCountedInTrack = false,
+                    lastLocationDropReason = "anchor confirmation $candidateCount/$INITIAL_ANCHOR_REQUIRED_COUNT",
+                    lastRawSpeedMps = rawSpeed,
+                    lastDerivedSpeedMps = null,
+                    lastSpeedSource = speedSourceLabel,
+                    lastSpeedMethod = null,
+                ),
+            )
+        }
+
+        val acceptedPoints = ArrayList<GpsPoint>(candidates.size)
+        var previousDisplaySpeedMps = 0.0
+        var estimate: SpeedEstimator.Estimate? = null
+        candidates.forEach { candidate ->
+            estimate = SpeedEstimator.estimate(
+                trackPointsIncludingNew = acceptedPoints + candidate,
+                newPoint = candidate,
+                previousDisplaySpeedMps = previousDisplaySpeedMps,
+                rawDopplerMps = candidate.speedMps,
+                segmentStartIndex = 0,
+            )
+            acceptedPoints += candidate.copy(speedMps = estimate!!.instantSpeedMps)
+            previousDisplaySpeedMps = estimate!!.displaySpeedMps
+        }
+        val lastEstimate = requireNotNull(estimate)
+        val display = TrackDataFilter.displaySnapshot(acceptedPoints)
+        return Result(
+            state = state.copy(
+                livePoints = acceptedPoints,
+                displayPoints = display.points,
+                mapPoints = display.points,
+                displayDistanceM = display.totalDistanceM,
+                spikePointIndices = TrackDataFilter.spikeIndices(acceptedPoints),
+                pendingAnchorPoint = null,
+                pendingAnchorPoints = emptyList(),
+                consecutiveAnchorCandidateCount = 0,
+                pendingOutlierPoint = null,
+                consecutiveTrackOutlierCount = 0,
+                mapCenterLat = point.lat,
+                mapCenterLng = point.lng,
+                currentAltitude = point.altitude,
+                currentSpeedMps = lastEstimate.displaySpeedMps.coerceAtLeast(0.0),
+                signalLost = false,
+                trackPausedForSignal = false,
+                consecutiveGoodGpsCount = 0,
+                consecutiveBadGpsCount = 0,
+                lastLocationAtMs = point.timestamp,
+                lastLocationAccuracyM = point.accuracy,
+                lastLocationCountedInTrack = true,
+                lastLocationDropReason = null,
+                lastRawSpeedMps = rawSpeed,
+                lastDerivedSpeedMps = lastEstimate.derivedSpeedMps,
+                lastSpeedSource = speedSourceLabel,
+                lastSpeedMethod = lastEstimate.method,
+                lastDopplerWeight = lastEstimate.dopplerWeight,
+                lastSpeedAccuracyMps = point.speedAccuracyMps,
+                lastSegmentDtMs = lastEstimate.lastSegmentDtMs,
+                lastSegmentCount = lastEstimate.segmentCount,
+            ),
+            acceptedPoints = acceptedPoints,
         )
     }
 
@@ -282,13 +436,21 @@ object RecordingLocationProcessor {
             state.displayPoints + acceptedPoint
         }
         val segmentDistance = TrackDataFilter.validSegmentDistanceMeters(previous, acceptedPoint) ?: 0.0
-        val previousSegmentDistance = previousPrevious?.let {
+        val previousDisplayPoint = if (previousIsNewSpike) {
+            state.displayPoints.dropLast(1).lastOrNull()
+        } else {
+            state.displayPoints.lastOrNull()
+        }
+        val previousSegmentDistance = previousDisplayPoint?.let {
             TrackDataFilter.validSegmentDistanceMeters(it, previous)
+        } ?: 0.0
+        val bridgedSegmentDistance = previousDisplayPoint?.let {
+            TrackDataFilter.validSegmentDistanceMeters(it, acceptedPoint)
         } ?: 0.0
         val distance = when {
             previousIsNewSpike && previousIndex - 1 !in state.spikePointIndices ->
-                state.displayDistanceM - previousSegmentDistance
-            previousIndex in state.spikePointIndices -> state.displayDistanceM
+                state.displayDistanceM - previousSegmentDistance + bridgedSegmentDistance
+            previousIndex in state.spikePointIndices -> state.displayDistanceM + bridgedSegmentDistance
             else -> state.displayDistanceM + segmentDistance
         }.coerceAtLeast(0.0)
 

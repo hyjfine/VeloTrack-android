@@ -22,6 +22,15 @@ data class RecordingSessionState(
     val mapPoints: List<GpsPoint> = emptyList(),
     val displayDistanceM: Double = 0.0,
     val spikePointIndices: Set<Int> = emptySet(),
+    /** 当前写入段；暂停恢复或异常重锚时递增。 */
+    val currentSegmentId: Int = 0,
+    /** 录制刚开始时的候选锚点，连续稳定后才允许首点入库。 */
+    val pendingAnchorPoint: GpsPoint? = null,
+    /** 首锚确认期间的完整候选序列；确认成功后整体补入轨迹，避免丢失起步路段。 */
+    val pendingAnchorPoints: List<GpsPoint> = emptyList(),
+    val consecutiveAnchorCandidateCount: Int = 0,
+    /** 相对当前轨迹异常、但可能属于新真实位置的候选重锚点。 */
+    val pendingOutlierPoint: GpsPoint? = null,
     val currentSpeedMps: Double = 0.0,
     val mapCenterLat: Double = 31.2304,
     val mapCenterLng: Double = 121.4737,

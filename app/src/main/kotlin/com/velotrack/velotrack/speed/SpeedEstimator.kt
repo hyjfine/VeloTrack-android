@@ -200,6 +200,7 @@ object SpeedEstimator {
             if (segments.size >= DERIVED_MAX_SEGMENTS) break
             val a = points[i - 1]
             val b = points[i]
+            if (a.segmentId != b.segmentId) break
             // 时间窗口剪枝：当段「较新点」距最新点 > 窗口，且已经凑够最少段，则停
             if (segments.size >= DERIVED_MIN_SEGMENTS && newestMono - monoOrTimestamp(b) > DERIVED_WINDOW_MS) {
                 break
@@ -219,6 +220,7 @@ object SpeedEstimator {
     }
 
     private fun segmentSpeedMps(a: GpsPoint, b: GpsPoint): Double? {
+        if (a.segmentId != b.segmentId) return null
         val dtMs = monoDtMs(a, b)
         if (dtMs < MIN_SEGMENT_DT_MS || dtMs > MAX_SEGMENT_GAP_MS) return null
         val dist = GeoUtils.haversineMeters(a.lat, a.lng, b.lat, b.lng)
@@ -259,7 +261,7 @@ object SpeedEstimator {
 
     private fun dopplerFusionWeight(point: GpsPoint, rawDopplerMps: Double, derived: Double?): Double {
         if (rawDopplerMps < DOPPLER_MIN_MPS) return 0.0
-        if (!point.isGpsFix) return 0.0
+        if (!point.isSpeedTrustworthy) return 0.0
         if (point.accuracy > DOPPLER_MAX_ACCURACY_M) return 0.0
 
         // 1) 用 speedAccuracy 直接调权（API 26+）

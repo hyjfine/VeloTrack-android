@@ -66,6 +66,8 @@ class RecordingSessionManager(
     private var serviceRunning = false
 
     private var recordingStartAt = 0L
+    /** 当前活动录制段开始的 elapsedRealtime；用于拒绝启动/恢复前产生的缓存 fix。 */
+    private var recordingStartMonotonicMs = 0L
     private var accumulatedElapsed = 0L
     private var tickerAnchorElapsed = SystemClock.elapsedRealtime()
     private var persistedPointCount = 0
@@ -95,6 +97,7 @@ class RecordingSessionManager(
         val rideId = System.currentTimeMillis().toString()
         val now = System.currentTimeMillis()
         recordingStartAt = now
+        recordingStartMonotonicMs = SystemClock.elapsedRealtime()
         accumulatedElapsed = 0L
         persistedPointCount = 0
         pendingFlushPoints = mutableListOf()
@@ -135,6 +138,7 @@ class RecordingSessionManager(
             _state.update { it.copy(isPaused = true, currentSpeedMps = 0.0) }
         } else {
             tickerAnchorElapsed = SystemClock.elapsedRealtime()
+            recordingStartMonotonicMs = tickerAnchorElapsed
             lastLocationMonotonicMs = 0L
             // 恢复录制：开启新段，避免跨过暂停期的位移被算成异常速度。
             segmentStartIndex = _state.value.livePoints.size
@@ -145,6 +149,12 @@ class RecordingSessionManager(
                     trackPausedForSignal = false,
                     consecutiveGoodGpsCount = 0,
                     consecutiveBadGpsCount = 0,
+                    currentSegmentId = it.currentSegmentId + 1,
+                    pendingAnchorPoint = null,
+                    pendingAnchorPoints = emptyList(),
+                    consecutiveAnchorCandidateCount = 0,
+                    pendingOutlierPoint = null,
+                    consecutiveTrackOutlierCount = 0,
                 )
             }
             startLocationTracker(hasFineLocation)
@@ -196,7 +206,7 @@ class RecordingSessionManager(
         val totalDistance = stats.totalDistanceM
         val avgSpeed = stats.avgSpeedMps
         val maxSpeed = stats.maxSpeedMps
-        val start = if (points.isEmpty()) recordingStartAt else points.first().timestamp
+        val start = recordingStartAt
         val end = if (points.isEmpty()) System.currentTimeMillis() else points.last().timestamp
         val ride = Ride(
             id = rideId,
@@ -258,28 +268,32 @@ class RecordingSessionManager(
     }
 
     private fun applyLocation(point: GpsPoint) {
-        lastLocationStore.write(point)
         val s = _state.value
         val result = RecordingLocationProcessor.apply(
             state = s,
             point = point,
             recordingStartAt = recordingStartAt,
+            recordingStartMonotonicMs = recordingStartMonotonicMs,
             isRecording = s.isRecording,
             isPaused = s.isPaused,
             segmentStartIndex = segmentStartIndex,
         )
+        if (result.state.currentSegmentId != s.currentSegmentId) {
+            segmentStartIndex = s.livePoints.size
+        }
+        result.acceptedPoints.lastOrNull()?.let(lastLocationStore::write)
         _state.value = result.state
         if (BuildConfig.DEBUG && DebugLogRecorder.isRecording) {
             DebugLogRecorder.append(
                 "PROC",
-                DebugLogFormats.procLine(result.state, result.acceptedPoint != null),
+                DebugLogFormats.procLine(result.state, result.acceptedPoints.isNotEmpty()),
             )
         }
-        if (result.acceptedPoint != null || result.state.lastSpeedMethod != null) {
+        if (result.acceptedPoints.isNotEmpty() || result.state.lastSpeedMethod != null) {
             lastLocationMonotonicMs = SystemClock.elapsedRealtime()
         }
-        if (result.acceptedPoint != null) {
-            pendingFlushPoints.add(result.acceptedPoint)
+        if (result.acceptedPoints.isNotEmpty()) {
+            pendingFlushPoints.addAll(result.acceptedPoints)
             if (pendingFlushPoints.size >= FLUSH_BATCH_SIZE) {
                 flushPendingPoints()
             }
@@ -355,6 +369,7 @@ class RecordingSessionManager(
                 0L
             }
             recordingStartAt = ride.startTime
+            recordingStartMonotonicMs = SystemClock.elapsedRealtime()
             accumulatedElapsed = elapsed
             persistedPointCount = points.size
             pendingFlushPoints = mutableListOf()
@@ -373,6 +388,7 @@ class RecordingSessionManager(
                 mapPoints = com.velotrack.velotrack.speed.TrackDataFilter.downsampleForMap(display.points),
                 displayDistanceM = display.totalDistanceM,
                 spikePointIndices = spikes,
+                currentSegmentId = points.maxOfOrNull { it.segmentId } ?: 0,
                 mapCenterLat = last?.lat ?: _state.value.mapCenterLat,
                 mapCenterLng = last?.lng ?: _state.value.mapCenterLng,
                 currentAltitude = last?.altitude,
