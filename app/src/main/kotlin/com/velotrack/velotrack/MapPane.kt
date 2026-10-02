@@ -399,8 +399,10 @@ private fun GooglePane(
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val mapResumeEpoch = rememberMapResumeEpoch(lifecycle)
-    val pointsTrackKey = routePointsTrackKey(points)
-    val geometry = remember(pointsTrackKey, mapResumeEpoch) { routeGeometry(points) }
+    val pointsTrackKey = remember(points, isActive) {
+        if (isActive) routePointsTrackKey(points) else Triple(0, 0L, 0)
+    }
+    val geometry = remember(pointsTrackKey, mapResumeEpoch, isActive) { routeGeometry(if (isActive) points else emptyList()) }
     val routeSegments = geometry.drawableSegments
     val routePoints = remember(routeSegments) { routeSegments.flatten() }
     val cameraState = rememberCameraPositionState {
@@ -420,33 +422,6 @@ private fun GooglePane(
     val polyColor = VeloColors.polyline.copy(alpha = 1f)
     val polyShadowColor = Color.Black.copy(alpha = 0.4f)
     val markerDensity = LocalContext.current.resources.displayMetrics.density
-    val startMarkerIcon = remember(markerDensity) {
-        GoogleBitmapDescriptorFactory.fromBitmap(
-            startEndpointMarkerBitmap(
-                fillColor = VeloColors.accent.toArgb(),
-                strokeColor = VeloColors.foreground.toArgb(),
-                density = markerDensity,
-            ),
-        )
-    }
-    val finishMarkerIcon = remember(markerDensity) {
-        GoogleBitmapDescriptorFactory.fromBitmap(
-            finishEndpointMarkerBitmap(
-                flagColor = VeloColors.accent.toArgb(),
-                poleColor = VeloColors.foreground.toArgb(),
-                density = markerDensity,
-            ),
-        )
-    }
-    val routeHeadArrowIcon = remember(markerDensity) {
-        GoogleBitmapDescriptorFactory.fromBitmap(
-            routeHeadArrowBitmap(
-                fillColor = VeloColors.accent.toArgb(),
-                strokeColor = VeloColors.foreground.toArgb(),
-                density = markerDensity,
-            ),
-        )
-    }
     val activeRoutePoints = geometry.activeSegment
     val routeHead = remember(activeRoutePoints, showRouteHeadArrow, routeHeadHeadingDeg) {
         if (showRouteHeadArrow) routeHeadFromPoints(activeRoutePoints, routeHeadHeadingDeg) else null
@@ -556,6 +531,33 @@ private fun GooglePane(
         cameraPositionState = cameraState,
         onMapLoaded = { isMapLoaded = true },
     ) {
+        val startMarkerIcon = remember(markerDensity) {
+            GoogleBitmapDescriptorFactory.fromBitmap(
+                startEndpointMarkerBitmap(
+                    fillColor = VeloColors.accent.toArgb(),
+                    strokeColor = VeloColors.foreground.toArgb(),
+                    density = markerDensity,
+                ),
+            )
+        }
+        val finishMarkerIcon = remember(markerDensity) {
+            GoogleBitmapDescriptorFactory.fromBitmap(
+                finishEndpointMarkerBitmap(
+                    flagColor = VeloColors.accent.toArgb(),
+                    poleColor = VeloColors.foreground.toArgb(),
+                    density = markerDensity,
+                ),
+            )
+        }
+        val routeHeadArrowIcon = remember(markerDensity) {
+            GoogleBitmapDescriptorFactory.fromBitmap(
+                routeHeadArrowBitmap(
+                    fillColor = VeloColors.accent.toArgb(),
+                    strokeColor = VeloColors.foreground.toArgb(),
+                    density = markerDensity,
+                ),
+            )
+        }
         polylines.forEachIndexed { index, polyline ->
             Polyline(
                 points = polyline,
@@ -634,8 +636,10 @@ private fun AmapPane(
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val mapResumeEpoch = rememberMapResumeEpoch(lifecycle)
-    val pointsTrackKey = routePointsTrackKey(points)
-    val geometry = remember(pointsTrackKey, mapResumeEpoch) { routeGeometry(points) }
+    val pointsTrackKey = remember(points, isActive) {
+        if (isActive) routePointsTrackKey(points) else Triple(0, 0L, 0)
+    }
+    val geometry = remember(pointsTrackKey, mapResumeEpoch, isActive) { routeGeometry(if (isActive) points else emptyList()) }
     val routeSegments = geometry.drawableSegments
     val routePoints = remember(routeSegments) { routeSegments.flatten() }
     val activeRoutePoints = geometry.activeSegment

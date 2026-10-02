@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "rides")
 data class RideEntity(
@@ -15,6 +16,8 @@ data class RideEntity(
     val avgSpeed: Double,
     val maxSpeed: Double,
     val movingDurationSec: Double,
+    val activeDurationMs: Long? = null,
+    @ColumnInfo(defaultValue = "0") val statsVersion: Int = 0,
 )
 
 @Entity(

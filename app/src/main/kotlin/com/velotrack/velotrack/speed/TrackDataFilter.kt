@@ -30,6 +30,43 @@ import kotlin.math.min
  *    - 图表序列：对清洗后速度做 3 点中值滤波
  */
 object TrackDataFilter {
+    const val STATS_VERSION = 2
+
+    /** Rendering points already carry inferred segment boundaries; sampling gaps are not outages. */
+    private class MapPoints(private val values: List<GpsPoint>) : AbstractList<GpsPoint>() {
+        override val size: Int get() = values.size
+        override fun get(index: Int): GpsPoint = values[index]
+    }
+
+    data class DistanceState(
+        val anchor: GpsPoint? = null,
+        val previous: GpsPoint? = null,
+        val totalDistanceM: Double = 0.0,
+        val movingDurationMs: Long = 0L,
+    )
+
+    /** Accumulate short displacements against a stable anchor, bounded by a contiguous window. */
+    fun advanceDistance(state: DistanceState, point: GpsPoint): DistanceState {
+        val previous = state.previous
+        var anchor = state.anchor
+        if (previous == null || anchor == null || isRouteBreak(previous, point)) {
+            return state.copy(anchor = point, previous = point)
+        }
+        if (segmentDtMs(anchor, point) > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS) {
+            anchor = previous
+        }
+        val segment = validSegment(anchor, point)
+        return if (segment != null) {
+            state.copy(anchor = point, previous = point,
+                totalDistanceM = state.totalDistanceM + segment.distanceM,
+                movingDurationMs = state.movingDurationMs +
+                    if (segment.speedMps > SpeedEstimator.STANDSTILL_SPEED_MPS) segment.dtMs else 0L,
+            )
+        } else state.copy(anchor = anchor, previous = point)
+    }
+
+    fun distanceState(points: List<GpsPoint>): DistanceState =
+        points.fold(DistanceState(), ::advanceDistance)
 
     /** 与 SpeedEstimator 一致：约 90 km/h。 */
     const val MAX_PLAUSIBLE_SPEED_MPS = TrackingPolicy.MAX_PLAUSIBLE_SPEED_MPS
@@ -124,7 +161,7 @@ object TrackDataFilter {
         for (i in 1 until points.size) {
             val previous = points[i - 1]
             val point = points[i]
-            if (isRouteBreak(previous, point)) {
+            if (if (points is MapPoints) previous.segmentId != point.segmentId else isRouteBreak(previous, point)) {
                 current = mutableListOf()
                 segments += current
             }
@@ -176,16 +213,26 @@ object TrackDataFilter {
         )
     }
 
-    /** 将长轨迹限制到地图可承受的点数，始终保留首尾点。 */
+    /** Infer real breaks before sampling. Keep each segment's endpoints even if they exceed the budget. */
     fun downsampleForMap(points: List<GpsPoint>, maxPoints: Int = 2_000): List<GpsPoint> {
         require(maxPoints >= 2)
-        var result = points
+        var result = if (points is MapPoints) points else withInferredSegments(points)
         while (result.size > maxPoints) {
-            result = result.filterIndexed { index, _ ->
-                index == 0 || index == result.lastIndex || index % 2 == 0
+            val reduced = result.filterIndexed { index, point ->
+                index == 0 || index == result.lastIndex || index % 2 == 0 ||
+                    result[index - 1].segmentId != point.segmentId ||
+                    result[index + 1].segmentId != point.segmentId
             }
+            if (reduced.size == result.size) break
+            result = reduced
         }
-        return result
+        return MapPoints(result)
+    }
+
+    fun appendMapPoint(points: List<GpsPoint>, previousRaw: GpsPoint?, point: GpsPoint): List<GpsPoint> {
+        val segment = (points.lastOrNull()?.segmentId ?: 0) +
+            if (previousRaw != null && isRouteBreak(previousRaw, point)) 1 else 0
+        return downsampleForMap(MapPoints(points + point.copy(segmentId = segment)))
     }
 
     fun summarize(points: List<GpsPoint>): Summary {
@@ -266,11 +313,20 @@ object TrackDataFilter {
         if (points.size < 2) return emptyList()
         val out = ArrayList<IndexedValidSegment>(points.size - 1)
         var previousIndex: Int? = null
+        var anchorIndex: Int? = null
         points.forEachIndexed { index, point ->
             if (index in spikes) return@forEachIndexed
-            previousIndex?.let { fromIndex ->
+            val previous = previousIndex
+            if (previous == null || isRouteBreak(points[previous], point)) {
+                anchorIndex = index
+            } else {
+                if (segmentDtMs(points[requireNotNull(anchorIndex)], point) > TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS) {
+                    anchorIndex = previous
+                }
+                val fromIndex = requireNotNull(anchorIndex)
                 validSegment(points[fromIndex], point)?.let { segment ->
                     out += IndexedValidSegment(fromIndex, index, segment)
+                    anchorIndex = index
                 }
             }
             previousIndex = index
@@ -342,8 +398,9 @@ object TrackDataFilter {
         segments.forEach { segment ->
             val speed = segment.value.speedMps
             // 后一个点先取上一段；其下一段有效时会再被前向速度覆盖。
-            if (derived[segment.toIndex].isNaN()) derived[segment.toIndex] = speed
-            derived[segment.fromIndex] = speed
+            for (index in segment.fromIndex..segment.toIndex) {
+                if (index !in spikes) derived[index] = speed
+            }
         }
         return List(points.size) { i ->
             if (i in spikes) return@List 0.0

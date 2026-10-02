@@ -66,6 +66,10 @@ data class Ride(
     val maxSpeed: Double,
     /** 有效移动时长（秒），经 [com.velotrack.velotrack.speed.TrackDataFilter] 计算；读库时填充。 */
     val movingDurationSec: Double = 0.0,
+    /** Checkpointed active time, excluding user pauses. Null denotes legacy records. */
+    val activeDurationMs: Long? = null,
+    val statsVersion: Int = 0,
+    val presentation: RidePresentationData? = null,
 )
 
 @Immutable

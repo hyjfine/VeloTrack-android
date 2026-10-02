@@ -30,11 +30,13 @@ class LocationTracker(
     private val onLocation: (GpsPoint) -> Unit,
     private val onDebugEvent: (String) -> Unit = {},
     private val onGnssStatus: (GnssSatelliteSnapshot) -> Unit = {},
+    private val onError: (String) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
-    private val fusedClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(appContext)
+    private val fusedClient: FusedLocationProviderClient by lazy { LocationServices.getFusedLocationProviderClient(appContext) }
     private val locationManager: LocationManager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private var running = false
+    private var subscriptionGeneration = 0L
     private var runningPrecise = true
     private var runningRecordingMode = false
     private var currentLocationToken: CancellationTokenSource? = null
@@ -148,6 +150,8 @@ class LocationTracker(
         if (running) stop()
         runningPrecise = precise
         runningRecordingMode = recordingMode
+        running = true
+        subscriptionGeneration++
         onDebugEvent("start provider=$provider precise=$precise recording=$recordingMode")
         try {
             if (!recordingMode) emitRecentKnownLocation()
@@ -156,12 +160,12 @@ class LocationTracker(
                 MapProvider.AMAP -> startAmapLocation(precise, recordingMode)
                 MapProvider.GOOGLE_MAPS -> startGoogleLocation(precise, recordingMode)
             }
-            running = true
         } catch (error: SecurityException) {
             val message = "Location permission unavailable: ${error.message.orEmpty()}"
             Log.w(TAG_LOC, message)
             onDebugEvent(message)
             stopInternal()
+            onError("定位权限不可用，请重新授予精确定位权限")
         }
     }
 
@@ -172,6 +176,10 @@ class LocationTracker(
     }
 
     private fun stopInternal() {
+        running = false
+        subscriptionGeneration++
+        runCatching { locationManager.removeUpdates(platformListener) }
+        platformFallbackStarted = false
         currentLocationToken?.cancel()
         currentLocationToken = null
         unregisterGnssCallback()
@@ -194,6 +202,12 @@ class LocationTracker(
 
     @SuppressLint("MissingPermission")
     private fun startGoogleLocation(precise: Boolean, recordingMode: Boolean) {
+        val generation = subscriptionGeneration
+        if (com.google.android.gms.common.GoogleApiAvailability.getInstance()
+                .isGooglePlayServicesAvailable(appContext) != com.google.android.gms.common.ConnectionResult.SUCCESS) {
+            startPlatformFallbackIfNeeded()
+            return
+        }
         if (!recordingMode) {
             fusedClient.lastLocation.addOnSuccessListener { location ->
                 if (location != null && location.isRecentEnough()) {
@@ -224,7 +238,12 @@ class LocationTracker(
             gmsRequest(precise, recordingMode),
             gmsCallback,
             Looper.getMainLooper(),
-        )
+        ).addOnFailureListener { error ->
+            if (running && generation == subscriptionGeneration) {
+                onDebugEvent("GMS subscription failed: ${error.javaClass.simpleName}; using system location")
+                startPlatformFallbackIfNeeded()
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -276,10 +295,16 @@ class LocationTracker(
 
     @SuppressLint("MissingPermission")
     private fun startPlatformFallbackIfNeeded() {
-        if (platformFallbackStarted) return
-        platformFallbackStarted = true
-        onDebugEvent("Platform fallback start precise=$runningPrecise")
-        startPlatformLocation(runningPrecise, recordingMode = true)
+        if (!running || platformFallbackStarted) return
+        try {
+            onDebugEvent("Platform fallback start precise=$runningPrecise")
+            startPlatformLocation(runningPrecise, recordingMode = runningRecordingMode)
+            platformFallbackStarted = true
+        } catch (error: Exception) {
+            onDebugEvent("Platform fallback failed: ${error.javaClass.simpleName}")
+            stopInternal()
+            onError("系统定位不可用，请检查定位开关和权限")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -332,6 +357,7 @@ class LocationTracker(
     }
 
     private fun deliverPoint(point: GpsPoint) {
+        if (!running) return
         if (deliveryGate.accept(point)) {
             onLocation(point)
         } else {

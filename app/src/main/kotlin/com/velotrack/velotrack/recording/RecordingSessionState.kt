@@ -3,6 +3,9 @@ package com.velotrack.velotrack.recording
 import androidx.compose.runtime.Immutable
 import com.velotrack.velotrack.GnssSatelliteSnapshot
 import com.velotrack.velotrack.GpsPoint
+import com.velotrack.velotrack.speed.TrackDataFilter
+
+enum class RecordingIssue { STORAGE, SAVE, PERMISSION, SERVICE, RECOVERED }
 
 /** 前台录制会话快照，由 [RecordingSessionManager] 发布。 */
 @Immutable
@@ -21,6 +24,9 @@ data class RecordingSessionState(
     /** 有上限的地图绘制点；完整原始点仍保留在 [livePoints] 并写入 Room。 */
     val mapPoints: List<GpsPoint> = emptyList(),
     val displayDistanceM: Double = 0.0,
+    val distanceState: TrackDataFilter.DistanceState = TrackDataFilter.DistanceState(),
+    /** One-point rollback lets an isolated spike be removed without rescanning the whole ride. */
+    val distanceBeforeLastPoint: TrackDataFilter.DistanceState = TrackDataFilter.DistanceState(),
     val spikePointIndices: Set<Int> = emptySet(),
     /** 当前写入段；暂停恢复或异常重锚时递增。 */
     val currentSegmentId: Int = 0,
@@ -66,4 +72,5 @@ data class RecordingSessionState(
     val gnss: GnssSatelliteSnapshot? = null,
     /** 录制持久化错误；保留内存会话，允许用户再次长按重试保存。 */
     val persistenceError: String? = null,
+    val issue: RecordingIssue? = null,
 )

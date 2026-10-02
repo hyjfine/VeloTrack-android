@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
                         onCancelDelete = { viewModel.cancelDeleteRide() },
                         onAnalyze = { viewModel.runAnalysis() },
                         onBackDetail = { viewModel.backFromDetail() },
+                        onRetryHistory = { viewModel.retryHistoryLoad() },
                         onToggleDebugLog = { viewModel.toggleDebugLog() },
                         onSaveDebugLog = { viewModel.saveDebugLog() },
                     )

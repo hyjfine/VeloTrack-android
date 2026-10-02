@@ -3,8 +3,9 @@ package com.velotrack.velotrack
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import com.amap.api.maps.CoordinateConverter
 
-/** Coordinate helpers used only at map-rendering boundaries. */
+/** SDK boundaries: canonical WGS-84 storage and AMap GCJ-02 rendering/location results. */
 object CoordinateTransform {
     data class Coordinate(val lat: Double, val lng: Double)
 
@@ -13,12 +14,15 @@ object CoordinateTransform {
     private const val ECCENTRICITY_EE = 0.00669342162296594323
 
     /**
-     * Converts WGS-84 GPS coordinates to GCJ-02 for mainland China map providers such as AMap.
-     * Coordinates outside mainland China are returned unchanged.
+     * Converts WGS-84 coordinates in the AMap SDK's supported GCJ-02 data region.
+     * The SDK owns geographic boundaries; points outside its region remain unchanged.
      */
     fun wgs84ToGcj02(lat: Double, lng: Double): Coordinate {
-        if (!isInMainlandChina(lat, lng)) return Coordinate(lat, lng)
+        if (!CoordinateConverter.isAMapDataAvailable(lat, lng)) return Coordinate(lat, lng)
+        return offsetToGcj02(lat, lng)
+    }
 
+    private fun offsetToGcj02(lat: Double, lng: Double): Coordinate {
         var dLat = transformLat(lng - 105.0, lat - 35.0)
         var dLng = transformLng(lng - 105.0, lat - 35.0)
         val radLat = lat / 180.0 * PI
@@ -31,25 +35,16 @@ object CoordinateTransform {
     }
 
     /**
-     * Converts GCJ-02 coordinates back to WGS-84 using a lightweight inverse approximation.
-     * This is intended for normalizing AMap location results before storing them as [GpsPoint].
+     * Only call for coordinates explicitly identified as GCJ-02 by the provider.
+     * Do not second-guess the provider's coordinate type using geographic rectangles.
      */
     fun gcj02ToWgs84(lat: Double, lng: Double): Coordinate {
-        if (!isInMainlandChina(lat, lng)) return Coordinate(lat, lng)
-
-        val gcj = wgs84ToGcj02(lat, lng)
-        return Coordinate(
-            lat = lat * 2 - gcj.lat,
-            lng = lng * 2 - gcj.lng,
-        )
-    }
-
-    /** Rough mainland-China guard. Hong Kong, Macau, and Taiwan are left unchanged. */
-    fun isInMainlandChina(lat: Double, lng: Double): Boolean {
-        if (lat !in 3.86..53.55 || lng !in 73.66..135.05) return false
-        if (lat in 21.75..22.65 && lng in 113.75..114.65) return false // Hong Kong / Macau
-        if (lat in 21.8..25.4 && lng in 119.3..122.1) return false // Taiwan
-        return true
+        var wgs = Coordinate(lat, lng)
+        repeat(4) {
+            val gcj = offsetToGcj02(wgs.lat, wgs.lng)
+            wgs = Coordinate(wgs.lat + lat - gcj.lat, wgs.lng + lng - gcj.lng)
+        }
+        return wgs
     }
 
     private fun transformLat(x: Double, y: Double): Double {
@@ -68,4 +63,3 @@ object CoordinateTransform {
         return result
     }
 }
-

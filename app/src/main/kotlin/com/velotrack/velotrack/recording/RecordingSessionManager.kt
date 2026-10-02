@@ -68,10 +68,11 @@ class RecordingSessionManager(
     private var recordingStartAt = 0L
     /** 当前活动录制段开始的 elapsedRealtime；用于拒绝启动/恢复前产生的缓存 fix。 */
     private var recordingStartMonotonicMs = 0L
-    private var accumulatedElapsed = 0L
-    private var tickerAnchorElapsed = SystemClock.elapsedRealtime()
+    private val recordingClock = RecordingClock(SystemClock::elapsedRealtime)
     private var persistedPointCount = 0
-    private var pendingFlushPoints = mutableListOf<GpsPoint>()
+    private var draftWriteBuffer = DraftWriteBuffer()
+    private var flushInFlight = false
+    private var flushRequested = false
     private var rideTitle: String = ""
 
     /** 当前活动段在 livePoints 中的起始下标。每次开始/恢复后重置为已有点数。 */
@@ -91,16 +92,16 @@ class RecordingSessionManager(
     fun startRecording(hasFineLocation: Boolean) {
         if (_state.value.isRecording || _state.value.isRestoring) return
         if (!hasFineLocation) {
-            _state.update { it.copy(persistenceError = "需要精确定位权限才能开始录制") }
+            _state.update { it.copy(persistenceError = "需要精确定位权限才能开始录制", issue = RecordingIssue.PERMISSION) }
             return
         }
         val rideId = System.currentTimeMillis().toString()
         val now = System.currentTimeMillis()
         recordingStartAt = now
         recordingStartMonotonicMs = SystemClock.elapsedRealtime()
-        accumulatedElapsed = 0L
+        recordingClock.restore()
         persistedPointCount = 0
-        pendingFlushPoints = mutableListOf()
+        draftWriteBuffer = DraftWriteBuffer()
         rideTitle = "Ride on ${SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())}"
         segmentStartIndex = 0
         lastLocationMonotonicMs = 0L
@@ -117,28 +118,19 @@ class RecordingSessionManager(
             mapCenterLng = _state.value.mapCenterLng,
         )
 
-        enqueueDbWrite("beginDraftRide") {
-            repo.beginDraftRide(rideId, rideTitle, now)
-        }
+        flushPendingPoints()
 
-        startLocationTracker(hasFineLocation)
-        startElapsedTicker()
-        startPeriodicFlush()
-        startForegroundService(RecordingForegroundService.ACTION_START)
+        enterActiveRecording(hasFineLocation)
     }
 
     fun togglePause(hasFineLocation: Boolean) {
         val s = _state.value
         if (!s.isRecording || s.isSaving) return
         if (!s.isPaused) {
-            accumulatedElapsed += elapsedSinceTickerAnchor()
-            elapsedTicker?.cancel()
+            pauseActiveRecording()
             flushPendingPoints()
-            locationTracker?.stop()
-            _state.update { it.copy(isPaused = true, currentSpeedMps = 0.0) }
         } else {
-            tickerAnchorElapsed = SystemClock.elapsedRealtime()
-            recordingStartMonotonicMs = tickerAnchorElapsed
+            recordingStartMonotonicMs = SystemClock.elapsedRealtime()
             lastLocationMonotonicMs = 0L
             // 恢复录制：开启新段，避免跨过暂停期的位移被算成异常速度。
             segmentStartIndex = _state.value.livePoints.size
@@ -157,13 +149,14 @@ class RecordingSessionManager(
                     consecutiveTrackOutlierCount = 0,
                 )
             }
-            startLocationTracker(hasFineLocation)
-            startElapsedTicker()
+            enterActiveRecording(hasFineLocation)
         }
         notifyService()
     }
 
-    fun pause() = togglePause(hasFineLocation = hasFineLocationPermission())
+    fun pause() {
+        if (_state.value.isRecording && !_state.value.isPaused) togglePause(hasFineLocationPermission())
+    }
 
     fun resume(hasFineLocation: Boolean) {
         if (_state.value.isRecording && _state.value.isPaused) {
@@ -172,17 +165,7 @@ class RecordingSessionManager(
     }
 
     fun resumeWithCurrentPermission() {
-        if (!hasFineLocationPermission()) {
-            _state.update {
-                it.copy(
-                    isPaused = true,
-                    currentSpeedMps = 0.0,
-                    persistenceError = "需要精确定位权限才能继续录制",
-                )
-            }
-            return
-        }
-        resume(hasFineLocation = true)
+        resume(hasFineLocation = hasFineLocationPermission())
     }
 
     fun stopRecording(onComplete: (Ride?) -> Unit) {
@@ -191,13 +174,8 @@ class RecordingSessionManager(
             onComplete(null)
             return
         }
-        if (!s.isPaused) {
-            accumulatedElapsed += elapsedSinceTickerAnchor()
-        }
-        elapsedTicker?.cancel()
+        pauseActiveRecording()
         flushJob?.cancel()
-        locationTracker?.stop()
-        locationTracker = null
 
         val rideId = s.rideId ?: return onComplete(null)
         val points = s.livePoints
@@ -210,7 +188,7 @@ class RecordingSessionManager(
                 isPaused = true,
                 isSaving = true,
                 currentSpeedMps = 0.0,
-                persistenceError = null,
+                persistenceError = null, issue = null,
             )
         }
 
@@ -218,14 +196,17 @@ class RecordingSessionManager(
         flushPendingPoints()
         scope.launch {
             // 长轨迹的尖峰扫描和汇总不应阻塞主线程或 Compose 绘制。
-            val statsResult = withContext(io) { runCatching { RideStats.summarize(points) } }
-            val stats = statsResult.getOrElse { error ->
+            val statsResult = withContext(io) { runCatching {
+                val stats = RideStats.summarize(points)
+                stats to com.velotrack.velotrack.RidePresentationData.build(points, stats)
+            } }
+            val (stats, presentation) = statsResult.getOrElse { error ->
                 Log.e(TAG, "summarize ride failed; draft retained for retry", error)
                 _state.update {
                     it.copy(
                         isSaving = false,
                         isPaused = true,
-                        persistenceError = "轨迹统计失败，请长按停止重试",
+                        persistenceError = "轨迹统计失败，请长按停止重试", issue = RecordingIssue.SAVE,
                     )
                 }
                 notifyService()
@@ -242,8 +223,12 @@ class RecordingSessionManager(
                 avgSpeed = stats.avgSpeedMps,
                 maxSpeed = stats.maxSpeedMps,
                 movingDurationSec = stats.movingDurationSec,
+                activeDurationMs = recordingClock.elapsedMs,
+                statsVersion = com.velotrack.velotrack.speed.TrackDataFilter.STATS_VERSION,
+                presentation = presentation,
             )
-            val finalize = enqueueDbWrite("finalizeRide") { repo.finalizeRide(ride) }
+            val buffer = draftWriteBuffer
+            val finalize = enqueueDbWrite("finalizeRide") { repo.finalizeRide(ride, buffer.acknowledgedPointCount) }
             val result = finalize.await()
             if (result.isSuccess) {
                 _state.value = RecordingSessionState(
@@ -261,7 +246,7 @@ class RecordingSessionManager(
                     it.copy(
                         isSaving = false,
                         isPaused = true,
-                        persistenceError = "保存失败，请长按停止重试",
+                        persistenceError = "保存失败，请长按停止重试", issue = RecordingIssue.SAVE,
                     )
                 }
                 notifyService()
@@ -285,6 +270,8 @@ class RecordingSessionManager(
             point = point,
             recordingStartAt = recordingStartAt,
             recordingStartMonotonicMs = recordingStartMonotonicMs,
+            activeSegmentStartedAt = System.currentTimeMillis() -
+                (SystemClock.elapsedRealtime() - recordingStartMonotonicMs).coerceAtLeast(0L),
             isRecording = s.isRecording,
             isPaused = s.isPaused,
             segmentStartIndex = segmentStartIndex,
@@ -300,12 +287,12 @@ class RecordingSessionManager(
                 DebugLogFormats.procLine(result.state, result.acceptedPoints.isNotEmpty()),
             )
         }
-        if (result.acceptedPoints.isNotEmpty() || result.state.lastSpeedMethod != null) {
+        if (result.acceptedPoints.isNotEmpty() || result.state.pendingAnchorPoints.size > s.pendingAnchorPoints.size ||
+            result.state.consecutiveGoodGpsCount > s.consecutiveGoodGpsCount) {
             lastLocationMonotonicMs = SystemClock.elapsedRealtime()
         }
         if (result.acceptedPoints.isNotEmpty()) {
-            pendingFlushPoints.addAll(result.acceptedPoints)
-            if (pendingFlushPoints.size >= FLUSH_BATCH_SIZE) {
+            if (result.state.livePoints.size - persistedPointCount >= FLUSH_BATCH_SIZE) {
                 flushPendingPoints()
             }
         }
@@ -315,11 +302,12 @@ class RecordingSessionManager(
     private fun maybeDecaySpeedOnSilence() {
         val s = _state.value
         if (!s.isRecording || s.isPaused) return
-        if (s.currentSpeedMps <= 0.0) return
-        if (lastLocationMonotonicMs <= 0L) return
-        val silentMs = SystemClock.elapsedRealtime() - lastLocationMonotonicMs
+        val lastUsable = lastLocationMonotonicMs.takeIf { it > 0L } ?: recordingStartMonotonicMs
+        val silentMs = SystemClock.elapsedRealtime() - lastUsable
         if (silentMs >= LOCATION_SILENCE_ZERO_MS) {
-            _state.update { it.copy(currentSpeedMps = 0.0) }
+            _state.update { it.copy(currentSpeedMps = 0.0, signalLost = true,
+                trackPausedForSignal = true, consecutiveGoodGpsCount = 0,
+                lastLocationDropReason = if (lastLocationMonotonicMs == 0L) "waiting for GPS" else "location timeout") }
         }
     }
 
@@ -374,16 +362,16 @@ class RecordingSessionManager(
             val points = ride.points
             val display = com.velotrack.velotrack.speed.TrackDataFilter.displaySnapshot(points)
             val spikes = com.velotrack.velotrack.speed.TrackDataFilter.spikeIndices(points)
-            val elapsed = if (points.size >= 2) {
-                (points.last().timestamp - points.first().timestamp).coerceAtLeast(0L)
-            } else {
-                0L
+            // Legacy drafts have no checkpoint; only contiguous segments provide a lower-bound estimate.
+            val elapsed = ride.activeDurationMs ?: points.zipWithNext().sumOf { (a, b) ->
+                val dt = if (a.monotonicMs > 0L && b.monotonicMs > 0L) b.monotonicMs - a.monotonicMs else b.timestamp - a.timestamp
+                if (a.segmentId == b.segmentId && dt in 1L..10_000L) dt else 0L
             }
             recordingStartAt = ride.startTime
             recordingStartMonotonicMs = SystemClock.elapsedRealtime()
-            accumulatedElapsed = elapsed
+            recordingClock.restore(elapsed)
             persistedPointCount = points.size
-            pendingFlushPoints = mutableListOf()
+            draftWriteBuffer = DraftWriteBuffer(points.size)
             rideTitle = ride.title
             segmentStartIndex = points.size
             val last = points.lastOrNull()
@@ -398,12 +386,14 @@ class RecordingSessionManager(
                 displayPoints = display.points.asPersistentTrackPoints(),
                 mapPoints = com.velotrack.velotrack.speed.TrackDataFilter.downsampleForMap(display.points),
                 displayDistanceM = display.totalDistanceM,
+                distanceState = com.velotrack.velotrack.speed.TrackDataFilter.distanceState(display.points),
+                distanceBeforeLastPoint = com.velotrack.velotrack.speed.TrackDataFilter.distanceState(display.points.dropLast(1)),
                 spikePointIndices = spikes,
                 currentSegmentId = points.maxOfOrNull { it.segmentId } ?: 0,
                 mapCenterLat = last?.lat ?: _state.value.mapCenterLat,
                 mapCenterLng = last?.lng ?: _state.value.mapCenterLng,
                 currentAltitude = last?.altitude,
-                persistenceError = "检测到未完成骑行，已暂停恢复",
+                persistenceError = "检测到未完成骑行，已暂停恢复", issue = RecordingIssue.RECOVERED,
             )
             Log.i(TAG, "recovered draft rideId=${ride.id} points=${points.size}")
             finishRecovery(true)
@@ -421,20 +411,59 @@ class RecordingSessionManager(
     fun notifyService() {
         if (serviceRunning) {
             RecordingNotificationHelper.updateNotification(appContext, _state.value)
-        } else {
-            startForegroundService(RecordingForegroundService.ACTION_UPDATE)
+        }
+    }
+
+    private fun enterActiveRecording(precise: Boolean) {
+        if (!precise || !hasFineLocationPermission()) {
+            pauseWithError("需要精确定位权限才能记录轨迹", RecordingIssue.PERMISSION)
+            return
+        }
+        recordingStartMonotonicMs = SystemClock.elapsedRealtime()
+        lastLocationMonotonicMs = 0L
+        recordingClock.resume()
+        _state.update { it.copy(isPaused = false, persistenceError = null, issue = null, signalLost = false) }
+        if (!startForegroundService(RecordingForegroundService.ACTION_START)) return
+        try {
+            startLocationTracker(precise)
+        } catch (error: Exception) {
+            Log.e(TAG, "location subscription failed", error)
+            pauseWithError("定位启动失败，请检查定位权限后重试")
+            return
+        }
+        if (_state.value.isPaused) return
+        startElapsedTicker()
+        startPeriodicFlush()
+        flushPendingPoints()
+    }
+
+    private fun pauseActiveRecording() {
+        recordingClock.pause()
+        elapsedTicker?.cancel()
+        elapsedTicker = null
+        locationTracker?.stop()
+        locationTracker = null
+        _state.update { it.copy(isPaused = true, elapsedMs = recordingClock.elapsedMs, currentSpeedMps = 0.0) }
+    }
+
+    fun pauseWithError(message: String, issue: RecordingIssue = RecordingIssue.SERVICE) {
+        if (!_state.value.isRecording) return
+        pauseActiveRecording()
+        _state.update { it.copy(persistenceError = message, issue = issue) }
+        flushPendingPoints()
+        notifyService()
+    }
+
+    fun onServiceDestroyed() {
+        serviceRunning = false
+        if (_state.value.isRecording && !_state.value.isPaused) {
+            pauseWithError("后台录制服务已停止，请恢复录制")
         }
     }
 
     private fun startLocationTracker(precise: Boolean) {
         if (!precise || !hasFineLocationPermission()) {
-            _state.update {
-                it.copy(
-                    isPaused = true,
-                    currentSpeedMps = 0.0,
-                    persistenceError = "需要精确定位权限才能记录轨迹",
-                )
-            }
+            pauseWithError("需要精确定位权限才能记录轨迹", RecordingIssue.PERMISSION)
             return
         }
         locationTracker?.stop()
@@ -444,16 +473,16 @@ class RecordingSessionManager(
             ::onLocation,
             ::onLocationDebug,
             ::onGnssStatus,
+            { pauseWithError(it) },
         ).also { it.start(precise = precise, recordingMode = true) }
     }
 
     private fun startElapsedTicker() {
         elapsedTicker?.cancel()
-        tickerAnchorElapsed = SystemClock.elapsedRealtime()
         elapsedTicker = scope.launch {
             var tick = 0
-            while (true) {
-                val elapsed = accumulatedElapsed + elapsedSinceTickerAnchor()
+            while (_state.value.isRecording && !_state.value.isPaused) {
+                val elapsed = recordingClock.elapsedMs
                 _state.update { it.copy(elapsedMs = elapsed) }
                 maybeDecaySpeedOnSilence()
                 if (tick % 5 == 0) {
@@ -464,9 +493,6 @@ class RecordingSessionManager(
             }
         }
     }
-
-    private fun elapsedSinceTickerAnchor(): Long =
-        SystemClock.elapsedRealtime() - tickerAnchorElapsed
 
     private fun startPeriodicFlush() {
         flushJob?.cancel()
@@ -480,13 +506,37 @@ class RecordingSessionManager(
 
     private fun flushPendingPoints() {
         val rideId = _state.value.rideId ?: return
-        if (pendingFlushPoints.isEmpty()) return
-        val batch = pendingFlushPoints.toList()
-        pendingFlushPoints.clear()
-        val startIndex = persistedPointCount
-        persistedPointCount += batch.size
-        enqueueDbWrite("appendTrackPoints") {
-            repo.appendTrackPoints(rideId, startIndex, batch)
+        if (flushInFlight) {
+            flushRequested = true
+            return
+        }
+        val points = _state.value.livePoints
+        val elapsed = recordingClock.elapsedMs
+        val buffer = draftWriteBuffer
+        val title = rideTitle
+        val start = recordingStartAt
+        flushInFlight = true
+        val task = enqueueDbWrite("flushDraft") {
+            buffer.flush(points,
+                ensureDraft = { repo.beginDraftRide(rideId, title, start) },
+                append = { index, batch -> repo.appendTrackPoints(rideId, index, batch, elapsed) },
+            )
+        }
+        scope.launch {
+            val result = task.await()
+            flushInFlight = false
+            val requested = flushRequested
+            flushRequested = false
+            if (_state.value.rideId != rideId) return@launch
+            if (result.isSuccess) {
+                persistedPointCount = buffer.acknowledgedPointCount
+                _state.update { s ->
+                    if (s.issue == RecordingIssue.STORAGE) s.copy(persistenceError = null, issue = null) else s
+                }
+            } else {
+                _state.update { it.copy(persistenceError = DRAFT_WRITE_ERROR, issue = RecordingIssue.STORAGE) }
+            }
+            if (requested && !_state.value.isSaving) flushPendingPoints()
         }
     }
 
@@ -518,23 +568,16 @@ class RecordingSessionManager(
             android.Manifest.permission.ACCESS_FINE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
 
-    private fun startForegroundService(action: String) {
-        val intent = Intent(appContext, RecordingForegroundService::class.java).apply {
-            this.action = action
+    private fun startForegroundService(action: String): Boolean {
+        val intent = Intent(appContext, RecordingForegroundService::class.java).apply { this.action = action }
+        return try {
+            appContext.startForegroundService(intent)
+            true
+        } catch (error: Exception) {
+            Log.e(TAG, "start foreground service failed action=$action", error)
+            pauseWithError("后台录制服务启动失败，请重试")
+            false
         }
-        runCatching { appContext.startForegroundService(intent) }
-            .onFailure { error ->
-                Log.e(TAG, "start foreground service failed action=$action", error)
-                locationTracker?.stop()
-                locationTracker = null
-                _state.update {
-                    it.copy(
-                        isPaused = true,
-                        currentSpeedMps = 0.0,
-                        persistenceError = "后台录制服务启动失败，请重试",
-                    )
-                }
-            }
     }
 
     @Suppress("ImplicitSamInstance")
@@ -548,6 +591,7 @@ class RecordingSessionManager(
         private const val FLUSH_INTERVAL_MS = 30_000L
         private const val DB_WRITE_ATTEMPTS = 3
         private const val DB_RETRY_DELAY_MS = 250L
+        private const val DRAFT_WRITE_ERROR = "轨迹暂未写入存储，正在保留并重试；请勿退出应用"
 
         /** 连续 4s 没有新有效点，仪表显示速度归零。 */
         private const val LOCATION_SILENCE_ZERO_MS = 4_000L

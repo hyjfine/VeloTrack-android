@@ -11,6 +11,9 @@ import androidx.lifecycle.viewModelScope
 import com.velotrack.velotrack.debug.DebugLogExporter
 import com.velotrack.velotrack.debug.DebugLogRecorder
 import com.velotrack.velotrack.recording.RecordingSessionState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
@@ -52,6 +55,9 @@ data class TrackUiState(
     val currentSpeedMps: Double = 0.0,
     val currentAltitude: Double? = null,
     val history: List<Ride> = emptyList(),
+    val historyError: String? = null,
+    val isHistoryLoading: Boolean = false,
+    val isDetailLoading: Boolean = false,
     val selectedRide: Ride? = null,
     val pendingDeleteRideId: String? = null,
     val isDeletingRide: Boolean = false,
@@ -60,6 +66,7 @@ data class TrackUiState(
     val isAnalysing: Boolean = false,
     val errorMessage: String? = null,
     val recordingErrorMessage: String? = null,
+    val recordingIssue: com.velotrack.velotrack.recording.RecordingIssue? = null,
     val lastLocationAtMs: Long? = null,
     val lastLocationAccuracyM: Double? = null,
     val lastLocationCountedInTrack: Boolean = false,
@@ -92,14 +99,20 @@ class TrackViewModel(
     private var startCountdownJob: Job? = null
     private var analysisJob: Job? = null
     private var detailLoadJob: Job? = null
+    private var historyLoadJob: Job? = null
+    private var detailRequestVersion = 0L
+    private var failedDetailRide: Ride? = null
     private var activeAnalysisRequestId: String? = null
-    private val analysisCache = mutableMapOf<String, String>()
+    private val analysisCache = object : LinkedHashMap<String, String>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 32
+    }
+    private val debugLogCallback: () -> Unit = { syncDebugLogUi() }
     private val historicalRepairMutex = Mutex()
     var hasFineLocation: Boolean = true
         private set
 
     init {
-        DebugLogRecorder.onStateChanged = ::syncDebugLogUi
+        DebugLogRecorder.onStateChanged = debugLogCallback
         loadHistory()
         viewModelScope.launch {
             recording.state.collect { session -> mergeRecordingSession(session) }
@@ -128,6 +141,8 @@ class TrackViewModel(
     }
 
     fun setView(view: AppView) {
+        cancelDetailLoad()
+        if (view != AppView.DETAIL) cancelAnalysis()
         if (view != AppView.RECORDING) {
             cancelStartCountdown()
         }
@@ -198,26 +213,14 @@ class TrackViewModel(
     }
 
     private fun applyRideStopped(ride: Ride) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val refreshed = repo.listRides()
-            _uiState.update {
-                it.copy(
-                    isRecording = false,
-                    isPaused = false,
-                    startCountdownSeconds = null,
-                    isHolding = false,
-                    elapsedMs = 0L,
-                    livePoints = emptyList(),
-                    currentSpeedMps = 0.0,
-                    currentAltitude = null,
-                    history = refreshed,
-                    selectedRide = ride,
-                    view = AppView.DETAIL,
-                    aiAnalysis = null,
-                    errorMessage = null,
-                )
-            }
+        cancelDetailLoad()
+        cancelAnalysis()
+        _uiState.update {
+            it.copy(isRecording = false, isPaused = false, startCountdownSeconds = null,
+                isHolding = false, elapsedMs = 0L, livePoints = emptyList(), currentSpeedMps = 0.0,
+                selectedRide = ride, view = AppView.DETAIL, aiAnalysis = null, errorMessage = null)
         }
+        loadHistory()
     }
 
     fun beginHold() {
@@ -304,49 +307,85 @@ class TrackViewModel(
     }
 
     fun loadHistory() {
-        viewModelScope.launch(Dispatchers.IO) {
-            repairHistoricalRidesIfNeeded()
-            val rides = repo.listRides()
-            _uiState.update { it.copy(history = rides) }
+        historyLoadJob?.cancel()
+        _uiState.update { it.copy(isHistoryLoading = true, historyError = null) }
+        historyLoadJob = viewModelScope.launch {
+            try {
+                val rides = withContext(Dispatchers.IO) {
+                    repairHistoricalRidesIfNeeded()
+                    repo.listRides()
+                }
+                _uiState.update { it.copy(history = rides, isHistoryLoading = false) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e("VeloDB", "history read failed", error)
+                _uiState.update { it.copy(isHistoryLoading = false, historyError = "读取骑行记录失败，请重试") }
+            }
         }
+    }
+
+    fun retryHistoryLoad() {
+        failedDetailRide?.let(::openRide) ?: loadHistory()
     }
 
     private suspend fun repairHistoricalRidesIfNeeded() {
         historicalRepairMutex.withLock {
             val app = getApplication<Application>()
             val prefs = app.getSharedPreferences(DATA_REPAIR_PREFS, Application.MODE_PRIVATE)
-            if (prefs.getBoolean(KEY_TRACK_SEGMENT_REPAIR_V1, false)) return@withLock
+            if (prefs.getInt(KEY_STATS_VERSION, 0) == com.velotrack.velotrack.speed.TrackDataFilter.STATS_VERSION) return@withLock
             runCatching { repo.repairHistoricalRides() }
                 .onSuccess { repairedCount ->
-                    prefs.edit { putBoolean(KEY_TRACK_SEGMENT_REPAIR_V1, true) }
+                    prefs.edit { putInt(KEY_STATS_VERSION, com.velotrack.velotrack.speed.TrackDataFilter.STATS_VERSION) }
                     Log.i("VeloDB", "historical track repair complete rides=$repairedCount")
                 }
-                .onFailure { Log.e("VeloDB", "historical track repair failed", it) }
+                .onFailure {
+                    Log.e("VeloDB", "historical track repair failed", it)
+                    throw it
+                }
         }
+    }
+
+    private fun cancelDetailLoad() {
+        failedDetailRide = null
+        detailRequestVersion++
+        detailLoadJob?.cancel()
+        detailLoadJob = null
+        _uiState.update { it.copy(isDetailLoading = false) }
     }
 
     fun openRide(ride: Ride) {
         cancelStartCountdown()
         cancelAnalysis()
-        detailLoadJob?.cancel()
-        detailLoadJob = viewModelScope.launch(Dispatchers.IO) {
-            val fullRide = repo.getRide(ride.id) ?: return@launch
-            _uiState.update {
-                it.copy(
-                    selectedRide = fullRide,
-                    view = AppView.DETAIL,
-                    aiAnalysis = analysisCache[fullRide.id],
-                    isAnalysing = false,
-                    errorMessage = null,
-                )
+        cancelDetailLoad()
+        failedDetailRide = null
+        val request = detailRequestVersion
+        _uiState.update { it.copy(isDetailLoading = true, historyError = null) }
+        detailLoadJob = viewModelScope.launch {
+            try {
+                val fullRide = withContext(Dispatchers.IO) { repo.getRide(ride.id) }
+                    ?: error("Ride no longer exists")
+                ensureActive()
+                if (request != detailRequestVersion) return@launch
+                _uiState.update {
+                    it.copy(selectedRide = fullRide, view = AppView.DETAIL,
+                        aiAnalysis = analysisCache[fullRide.id], isAnalysing = false,
+                        isDetailLoading = false, errorMessage = null)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (request != detailRequestVersion) return@launch
+                Log.e("VeloDB", "detail read failed", error)
+                failedDetailRide = ride
+                _uiState.update { it.copy(isDetailLoading = false, historyError = "读取这条骑行失败，请重试") }
             }
         }
     }
 
     fun backFromDetail() {
         cancelStartCountdown()
-        detailLoadJob?.cancel()
-        detailLoadJob = null
+        cancelDetailLoad()
         cancelAnalysis()
         _uiState.update {
             it.copy(view = AppView.HISTORY, selectedRide = null, aiAnalysis = null, isAnalysing = false)
@@ -365,11 +404,14 @@ class TrackViewModel(
         val id = _uiState.value.pendingDeleteRideId ?: return
         if (_uiState.value.isDeletingRide) return
         _uiState.update { it.copy(isDeletingRide = true, deleteRideError = null) }
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             runCatching {
-                repo.deleteRide(id)
-                repo.listRides()
+                withContext(Dispatchers.IO) {
+                    repo.deleteRide(id)
+                    repo.listRides()
+                }
             }.onSuccess { rides ->
+                analysisCache.remove(id)
                 _uiState.update {
                     it.copy(
                         history = rides,
@@ -379,6 +421,7 @@ class TrackViewModel(
                     )
                 }
             }.onFailure { error ->
+                if (error is CancellationException) throw error
                 Log.e("VeloDB", "delete ride failed id=$id", error)
                 _uiState.update {
                     it.copy(isDeletingRide = false, deleteRideError = "删除失败，请重试")
@@ -401,7 +444,7 @@ class TrackViewModel(
                 "promptChars=${prompt.length}",
         )
         _uiState.update { it.copy(isAnalysing = true, aiAnalysis = null, errorMessage = null) }
-        analysisJob = viewModelScope.launch(Dispatchers.IO) {
+        analysisJob = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             runCatching {
                 GeminiClient.generateContent(
@@ -420,6 +463,7 @@ class TrackViewModel(
                     _uiState.update { it.copy(isAnalysing = false, aiAnalysis = text) }
                 }
             }.onFailure { error ->
+                if (error is CancellationException && error !is TimeoutCancellationException) throw error
                 Log.w(
                     AI_LOG_TAG,
                     "analysis failed requestId=$requestId elapsedMs=${System.currentTimeMillis() - startedAt} " +
@@ -443,6 +487,13 @@ class TrackViewModel(
         activeAnalysisRequestId = null
         analysisJob?.cancel()
         analysisJob = null
+        _uiState.update { it.copy(isAnalysing = false) }
+    }
+
+    override fun onCleared() {
+        if (DebugLogRecorder.onStateChanged === debugLogCallback) DebugLogRecorder.onStateChanged = null
+        analysisCache.clear()
+        super.onCleared()
     }
 
     private fun mergeRecordingSession(session: RecordingSessionState) {
@@ -481,6 +532,7 @@ class TrackViewModel(
                 lastSegmentCount = session.lastSegmentCount,
                 gnss = session.gnss,
                 recordingErrorMessage = session.persistenceError,
+                recordingIssue = session.issue,
             )
         }
     }
@@ -524,6 +576,7 @@ class TrackViewModel(
 
     private fun analysisErrorMessage(error: Throwable): String =
         when ((error as? GeminiClient.GeminiProxyException)?.reason) {
+            GeminiClient.GeminiProxyException.Reason.MissingModel -> "请在开发配置中设置可用的 GEMINI_MODEL"
             GeminiClient.GeminiProxyException.Reason.MissingApiKey -> "AI 服务未配置，请稍后再试"
             GeminiClient.GeminiProxyException.Reason.RateLimited -> "AI 请求过于频繁，请稍后再试"
             GeminiClient.GeminiProxyException.Reason.Network -> "网络连接异常，请稍后重试"
@@ -536,7 +589,8 @@ class TrackViewModel(
     private fun buildPrompt(ride: Ride): String = """
         Analyze this cycling ride and provide professional coaching advice.
         Distance: ${formatDistanceMeters(ride.totalDistance)}
-        Duration: ${formatDurationMs((ride.endTime ?: ride.startTime) - ride.startTime)}
+        Moving duration: ${formatDurationMs((ride.movingDurationSec * 1000).toLong())}
+        Active recording duration: ${ride.activeDurationMs?.let(::formatDurationMs) ?: "unknown"}
         Avg Speed: ${formatSpeedKmh(ride.avgSpeed)} km/h
         Max Speed: ${formatSpeedKmh(ride.maxSpeed)} km/h
         Data samples: ${ride.points.size}
@@ -554,7 +608,7 @@ class TrackViewModel(
         private const val MAP_LOCATION_MAX_ACCURACY_M = 200.0
         private const val START_COUNTDOWN_SECONDS = 3
         private const val DATA_REPAIR_PREFS = "data_repair"
-        private const val KEY_TRACK_SEGMENT_REPAIR_V1 = "track_segments_v1"
+        private const val KEY_STATS_VERSION = "stats_version"
         private const val AI_LOG_TAG = "VeloAI"
 
         fun factory(application: Application, repo: RideRepository): ViewModelProvider.Factory =

@@ -6,7 +6,7 @@
 
 ## D1 · 地图方案：`flutter_map` + Carto dark_all
 
-**Status**: Accepted · 2026-04-22
+**Status**: Superseded by: D5 · 2026-10-02
 
 **Decision**: Flutter 端使用社区包 `flutter_map`，瓦片源沿用 h5 中的
 `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png`，
@@ -21,7 +21,7 @@
 
 ## D2 · AI 调用路径：前台原生代理（无后端）
 
-**Status**: Accepted · 2026-04-22
+**Status**: Superseded by: D5 · 2026-10-02
 
 **Decision**: 不引入独立后端。Gemini API Key 存储在原生端安全存储
 （Android: EncryptedSharedPreferences / Keystore；iOS: Keychain）。
@@ -42,7 +42,7 @@ Flutter 仅通过 `VeloNativeApi.analyzeRide(rideId)` 触发分析，原生端�
 
 ## D3 · 后台定位：不支持
 
-**Status**: Accepted · 2026-04-22
+**Status**: Superseded by: D5 · 2026-10-02
 
 **Decision**: 应用回到后台或锁屏即**自动暂停**定位采集，前台回来需用户手动恢复。
 
@@ -59,7 +59,7 @@ Flutter 仅通过 `VeloNativeApi.analyzeRide(rideId)` 触发分析，原生端�
 
 ## D4 · 历史数据迁移：不做
 
-**Status**: Accepted · 2026-04-22
+**Status**: Superseded by: D5 · 2026-10-02
 
 **Decision**: Flutter App 首发即空库。不提供从 h5 IndexedDB 的 `.gpx` 或 JSON 导入。
 
@@ -78,3 +78,18 @@ D2 原生代理 ─────┼──→ 不引入后端、不引入地图 SD
 D3 仅前台 ───────┘
 D4 不迁移 ───────→ 首发数据库空，安装即新用户
 ```
+
+
+## D5 · 原生 Android 现行实现
+
+**Status**: Accepted · 2026-10-02
+
+以当前 Kotlin 源码为准，替代 D1–D4 对本仓库的约束；旧文保留用于理解历史方案。
+
+- 界面：Jetpack Compose；国内高德、海外 Google Maps。定位引擎失败时可回退到系统 GPS。
+- 录制：前台定位服务支持后台和锁屏；进程重建后以暂停状态恢复草稿，由用户继续。
+- 存储：Room v6 双表，串行增量写入、确认后推进游标、活动时长检查点、统计版本与迁移测试。
+- 坐标：WGS-84 入库；高德 GCJ-02 定位归一化，地图边界按 SDK 适用区域转换。
+- AI：Release 仅走 HTTPS 服务端代理。Debug 可用显式模型配置直连；本地安全存储不能让打包密钥对 APK 持有者保密。
+- 数据延续：支持原生 Room 旧版本升级；跨 H5/Flutter 导入、用户自主备份仍需单独实现，不能与 Room 升级混为一谈。
+- 验证：单测、lint、Debug/Release 编译，模拟器实际执行迁移与持久化测试。发布前额外检查正式配置和实际安装行为。

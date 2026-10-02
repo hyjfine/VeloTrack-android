@@ -50,16 +50,23 @@ class RecordingForegroundService : Service() {
     }
 
     private fun promoteForeground() {
-        val notification = RecordingNotificationHelper.buildNotification(this, manager.attachService())
-        startForeground(
-            RecordingNotificationHelper.NOTIFICATION_ID,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
-        )
+        try {
+            val notification = RecordingNotificationHelper.buildNotification(this, manager.attachService())
+            startForeground(
+                RecordingNotificationHelper.NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+            )
+        } catch (error: RuntimeException) {
+            android.util.Log.e("VeloRecording", "foreground promotion failed", error)
+            manager.setServiceRunning(false)
+            manager.pauseWithError("后台录制服务不可用，请检查权限后恢复录制")
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
-        manager.setServiceRunning(false)
+        manager.onServiceDestroyed()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }

@@ -1,5 +1,7 @@
 # 原生接口契约（Pigeon）
 
+> 历史跨端设计参考：其中 Flutter/Pigeon/Carto 等描述不代表本仓库现状。当前 Android 实现以 Kotlin 源码、README 和 [D5](decisions.md#d5--原生-android-现行实现) 为准。
+
 三端通过 **Pigeon**（Flutter 官方 type-safe channel codegen）统一接口。
 **本文档是 Flutter / Android / iOS 三端唯一的对齐入口**，任何能力诉求必须先改本文档。
 

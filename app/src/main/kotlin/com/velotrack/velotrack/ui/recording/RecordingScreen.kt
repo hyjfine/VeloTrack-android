@@ -312,9 +312,10 @@ private fun RecordingHud(state: TrackUiState, modifier: Modifier = Modifier) {
     val status = when {
         state.isRestoringRecording -> "正在恢复"
         state.isSavingRide -> "正在保存"
-        state.recordingErrorMessage?.contains("保存失败") == true -> "保存失败"
-        state.recordingErrorMessage?.contains("未完成骑行") == true -> "已恢复记录"
-        state.recordingErrorMessage?.contains("权限") == true -> "需要定位权限"
+        state.recordingIssue == com.velotrack.velotrack.recording.RecordingIssue.STORAGE -> "存储异常"
+        state.recordingIssue == com.velotrack.velotrack.recording.RecordingIssue.SAVE -> "保存失败"
+        state.recordingIssue == com.velotrack.velotrack.recording.RecordingIssue.RECOVERED -> "已恢复记录"
+        state.recordingIssue == com.velotrack.velotrack.recording.RecordingIssue.PERMISSION -> "需要定位权限"
         state.recordingErrorMessage != null -> "服务异常"
         state.locationPermissionDenied -> "需要定位权限"
         state.startCountdownSeconds != null -> "准备出发"
@@ -324,6 +325,7 @@ private fun RecordingHud(state: TrackUiState, modifier: Modifier = Modifier) {
         else -> "等待骑行"
     }
     val statusColor = when {
+        state.recordingIssue == com.velotrack.velotrack.recording.RecordingIssue.RECOVERED -> VeloColors.warn
         state.recordingErrorMessage != null || state.locationPermissionDenied -> VeloColors.danger
         state.isPaused -> VeloColors.warn
         state.isRecording && !state.signalLost -> VeloColors.accent

@@ -35,6 +35,7 @@ object RecordingLocationProcessor {
         point: GpsPoint,
         recordingStartAt: Long,
         recordingStartMonotonicMs: Long = 0L,
+        activeSegmentStartedAt: Long = recordingStartAt,
         isRecording: Boolean,
         isPaused: Boolean,
         segmentStartIndex: Int = 0,
@@ -42,7 +43,7 @@ object RecordingLocationProcessor {
         val rawSpeed = point.speedMps
         val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
 
-        val freshnessDropReason = freshnessDropReason(point, recordingStartAt, recordingStartMonotonicMs)
+        val freshnessDropReason = freshnessDropReason(point, recordingStartAt, recordingStartMonotonicMs, activeSegmentStartedAt)
         if (freshnessDropReason != null) {
             return Result(
                 state.copy(
@@ -61,25 +62,8 @@ object RecordingLocationProcessor {
             )
         }
 
-        if (point.accuracy > MAP_LOCATION_MAX_ACCURACY_M) {
-            return Result(
-                state.copy(
-                    lastLocationAtMs = point.timestamp,
-                    lastLocationAccuracyM = point.accuracy,
-                    lastLocationCountedInTrack = false,
-                    lastLocationDropReason = "accuracy>${MAP_LOCATION_MAX_ACCURACY_M.toInt()}m",
-                    lastRawSpeedMps = rawSpeed,
-                    lastDerivedSpeedMps = null,
-                    lastSpeedSource = speedSourceLabel,
-                    lastSpeedMethod = null,
-                    pendingAnchorPoint = if (state.livePoints.isEmpty()) null else state.pendingAnchorPoint,
-                    pendingAnchorPoints = if (state.livePoints.isEmpty()) emptyList() else state.pendingAnchorPoints,
-                    consecutiveAnchorCandidateCount = if (state.livePoints.isEmpty()) 0 else state.consecutiveAnchorCandidateCount,
-                ),
-            )
-        }
-
         if (!isRecording || isPaused) {
+            if (point.accuracy !in TRACK_POINT_MIN_ACCURACY_M..MAP_LOCATION_MAX_ACCURACY_M) return Result(state)
             return Result(
                 state.copy(
                     lastLocationAtMs = point.timestamp,
@@ -97,7 +81,8 @@ object RecordingLocationProcessor {
             )
         }
 
-        val meetsAccuracy = point.accuracy in TRACK_POINT_MIN_ACCURACY_M..TRACK_POINT_MAX_ACCURACY_M
+        val meetsAccuracy = point.accuracy in TRACK_POINT_MIN_ACCURACY_M..TRACK_POINT_MAX_ACCURACY_M &&
+            point.lat in -90.0..90.0 && point.lng in -180.0..180.0
         val meetsSource = point.isTrustworthyTrackSource()
         val frameGood = meetsAccuracy && meetsSource
         val frameBad = !frameGood
@@ -138,7 +123,7 @@ object RecordingLocationProcessor {
             TrackDataFilter.rejectReasonForCandidate(it, pointForCurrentSegment) == null
         } ?: true
         val nextConsecutiveTrackOutlierCount = when {
-            !frameGood || !recoverySatisfied || trackOutlierReason == null -> 0
+            !frameGood || trackOutlierReason == null -> 0
             consistentWithPendingOutlier -> state.consecutiveTrackOutlierCount + 1
             else -> 1
         }
@@ -152,12 +137,13 @@ object RecordingLocationProcessor {
         }
 
         val canUseForTrack = frameGood && recoverySatisfied && outlierReason == null
-        val candidateForTrack = if (forceReanchor) {
+        val startsNewSegment = canUseForTrack && (forceReanchor || trackPausedForSignal)
+        val candidateForTrack = if (startsNewSegment) {
             pointForCurrentSegment.copy(segmentId = state.currentSegmentId + 1)
         } else {
             pointForCurrentSegment
         }
-        val speedSegmentStartIndex = if (forceReanchor) state.livePoints.size else segmentStartIndex
+        val speedSegmentStartIndex = if (startsNewSegment) state.livePoints.size else segmentStartIndex
 
         // 仪表速度与轨迹入库解耦：野点不入库但仍可估速；迟滞恢复期间避免未入库点污染位移导数。
         val speedEstimate = when {
@@ -193,7 +179,7 @@ object RecordingLocationProcessor {
             )
         }
 
-        val nextSpeed = speedEstimate?.displaySpeedMps ?: state.currentSpeedMps
+        val nextSpeed = speedEstimate?.displaySpeedMps ?: if (trackPausedForSignal) 0.0 else state.currentSpeedMps
         val dropReason = when {
             !meetsAccuracy -> if (point.accuracy < TRACK_POINT_MIN_ACCURACY_M) {
                 "map only: accuracy unknown"
@@ -235,7 +221,7 @@ object RecordingLocationProcessor {
         val nextConsecutiveGoodGpsCount = when {
             acceptedPoint != null -> 0
             !nextTrackPausedForSignal -> 0
-            frameBad || outlierReason != null -> 0
+            frameBad -> 0
             else -> consecutiveGoodGpsCount
         }
         val nextConsecutiveBadGpsCountFinal = when {
@@ -245,7 +231,7 @@ object RecordingLocationProcessor {
         }
         val nextConsecutiveTrackOutlierCountFinal = when {
             acceptedPoint != null -> 0
-            outlierReason != null -> nextConsecutiveTrackOutlierCount
+            frameGood && trackOutlierReason != null -> nextConsecutiveTrackOutlierCount
             else -> 0
         }
 
@@ -255,8 +241,10 @@ object RecordingLocationProcessor {
                 displayPoints = displayUpdate?.points ?: state.displayPoints,
                 mapPoints = displayUpdate?.mapPoints ?: state.mapPoints,
                 displayDistanceM = displayUpdate?.distanceM ?: state.displayDistanceM,
+                distanceState = displayUpdate?.distanceState ?: state.distanceState,
+                distanceBeforeLastPoint = displayUpdate?.distanceBeforeLastPoint ?: state.distanceBeforeLastPoint,
                 spikePointIndices = displayUpdate?.spikeIndices ?: state.spikePointIndices,
-                currentSegmentId = if (forceReanchor) state.currentSegmentId + 1 else state.currentSegmentId,
+                currentSegmentId = if (startsNewSegment) state.currentSegmentId + 1 else state.currentSegmentId,
                 pendingAnchorPoint = null,
                 pendingAnchorPoints = emptyList(),
                 consecutiveAnchorCandidateCount = 0,
@@ -295,6 +283,7 @@ object RecordingLocationProcessor {
         point: GpsPoint,
         recordingStartAt: Long,
         recordingStartMonotonicMs: Long,
+        activeSegmentStartedAt: Long,
     ): String? {
         if (point.isCached) return "cached location"
         val hasComparableMonotonicTime = recordingStartMonotonicMs > 0L && point.fixMonotonicMs > 0L
@@ -302,7 +291,11 @@ object RecordingLocationProcessor {
             if (point.fixMonotonicMs < recordingStartMonotonicMs) return "before active segment"
         } else {
             // Location.time 与系统壁钟都会受手动校时/NTP 回拨影响，仅在缺少单调时间时兜底。
-            if (point.timestamp < recordingStartAt) return "before recording start"
+            if (point.timestamp < recordingStartAt && activeSegmentStartedAt == recordingStartAt) return "before recording start"
+            if (point.timestamp < activeSegmentStartedAt) return "before active segment"
+            if (recordingStartMonotonicMs > 0L && System.currentTimeMillis() - point.timestamp > CALLBACK_MAX_AGE_MS) {
+                return "stale location timestamp"
+            }
             if (point.timestamp > System.currentTimeMillis() + FUTURE_TIMESTAMP_TOLERANCE_MS) {
                 return "future location timestamp"
             }
@@ -369,8 +362,10 @@ object RecordingLocationProcessor {
             state = state.copy(
                 livePoints = acceptedPoints.asPersistentTrackPoints(),
                 displayPoints = display.points.asPersistentTrackPoints(),
-                mapPoints = display.points,
+                mapPoints = TrackDataFilter.downsampleForMap(display.points),
                 displayDistanceM = display.totalDistanceM,
+                distanceState = TrackDataFilter.distanceState(display.points),
+                distanceBeforeLastPoint = TrackDataFilter.distanceState(display.points.dropLast(1)),
                 spikePointIndices = TrackDataFilter.spikeIndices(acceptedPoints),
                 pendingAnchorPoint = null,
                 pendingAnchorPoints = emptyList(),
@@ -407,6 +402,8 @@ object RecordingLocationProcessor {
         val mapPoints: List<GpsPoint>,
         val distanceM: Double,
         val spikeIndices: Set<Int>,
+        val distanceState: TrackDataFilter.DistanceState,
+        val distanceBeforeLastPoint: TrackDataFilter.DistanceState,
     )
 
     private fun updateDisplayTrack(state: RecordingSessionState, acceptedPoint: GpsPoint): DisplayUpdate {
@@ -417,6 +414,8 @@ object RecordingLocationProcessor {
                 mapPoints = listOf(acceptedPoint),
                 distanceM = 0.0,
                 spikeIndices = emptySet(),
+                distanceState = TrackDataFilter.advanceDistance(TrackDataFilter.DistanceState(), acceptedPoint),
+                distanceBeforeLastPoint = TrackDataFilter.DistanceState(),
             )
         }
 
@@ -435,37 +434,14 @@ object RecordingLocationProcessor {
         } else {
             state.displayPoints.appendTrackPoint(acceptedPoint)
         }
-        val segmentDistance = TrackDataFilter.validSegmentDistanceMeters(previous, acceptedPoint) ?: 0.0
-        val previousDisplayPoint = if (previousIsNewSpike) {
-            state.displayPoints.dropLast(1).lastOrNull()
-        } else {
-            state.displayPoints.lastOrNull()
-        }
-        val previousSegmentDistance = previousDisplayPoint?.let {
-            TrackDataFilter.validSegmentDistanceMeters(it, previous)
-        } ?: 0.0
-        val bridgedSegmentDistance = previousDisplayPoint?.let {
-            TrackDataFilter.validSegmentDistanceMeters(it, acceptedPoint)
-        } ?: 0.0
-        val distance = when {
-            previousIsNewSpike && previousIndex - 1 !in state.spikePointIndices ->
-                state.displayDistanceM - previousSegmentDistance + bridgedSegmentDistance
-            previousIndex in state.spikePointIndices -> state.displayDistanceM + bridgedSegmentDistance
-            else -> state.displayDistanceM + segmentDistance
-        }.coerceAtLeast(0.0)
-
+        val beforeLast = if (previousIsNewSpike) state.distanceBeforeLastPoint else state.distanceState
+        val distance = TrackDataFilter.advanceDistance(beforeLast, acceptedPoint)
         val nextMapBase = if (previousIsNewSpike) state.mapPoints.dropLast(1) else state.mapPoints
-        val nextMap = reduceMapPointsIfNeeded(nextMapBase + acceptedPoint)
-        return DisplayUpdate(nextDisplay, nextMap, distance, nextSpikes)
-    }
-
-    private fun reduceMapPointsIfNeeded(points: List<GpsPoint>): List<GpsPoint> {
-        if (points.size <= MAX_LIVE_MAP_POINTS) return points
-        val reduced = ArrayList<GpsPoint>(points.size / 2 + 2)
-        points.forEachIndexed { index, point ->
-            if (index == 0 || index == points.lastIndex || index % 2 == 0) reduced += point
-        }
-        return reduced
+        val previousDisplay = if (previousIsNewSpike) {
+            state.displayPoints.getOrNull(state.displayPoints.size - 2)
+        } else state.displayPoints.lastOrNull()
+        val nextMap = TrackDataFilter.appendMapPoint(nextMapBase, previousDisplay, acceptedPoint)
+        return DisplayUpdate(nextDisplay, nextMap, distance.totalDistanceM, nextSpikes, distance, beforeLast)
     }
 
     private fun GpsPoint.isTrustworthyTrackSource(): Boolean {
@@ -479,5 +455,4 @@ object RecordingLocationProcessor {
         }
     }
 
-    private const val MAX_LIVE_MAP_POINTS = 2_000
 }

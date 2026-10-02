@@ -36,6 +36,10 @@ import com.velotrack.velotrack.ui.VeloGlassSurface
 import com.velotrack.velotrack.ui.tapFeedbackClickable
 import com.velotrack.velotrack.ui.tabularTextStyle
 import java.util.Locale
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 
 @Composable
 fun BottomNavBar(
@@ -136,6 +140,7 @@ private fun NavItem(
         horizontalArrangement = Arrangement.Center,
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
+            .semantics { this.selected = selected; role = Role.Tab }
             .tapFeedbackClickable { onClick() }
             .padding(horizontal = 18.dp, vertical = 12.dp),
     ) {

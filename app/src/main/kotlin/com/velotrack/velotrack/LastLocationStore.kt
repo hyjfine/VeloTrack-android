@@ -5,6 +5,7 @@ import androidx.core.content.edit
 
 class LastLocationStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("last_location", Context.MODE_PRIVATE)
+    private var lastWriteMonotonicMs: Long? = null
 
     fun read(): GpsPoint? {
         if (!prefs.contains(KEY_LAT) || !prefs.contains(KEY_LNG)) return null
@@ -38,6 +39,9 @@ class LastLocationStore(context: Context) {
     fun write(point: GpsPoint) {
         if (point.isCached) return
         if (point.accuracy <= 0.0 || point.accuracy > MAX_CACHE_ACCURACY_M) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastWriteMonotonicMs?.let { now - it < 10_000L } == true) return
+        lastWriteMonotonicMs = now
         prefs.edit {
             putLong(KEY_LAT, point.lat.toBits())
             putLong(KEY_LNG, point.lng.toBits())

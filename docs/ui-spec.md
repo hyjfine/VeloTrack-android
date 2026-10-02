@@ -1,5 +1,7 @@
 # UI 规格书
 
+> 历史跨端设计参考：其中 Flutter/Pigeon/Carto 等描述不代表本仓库现状。当前 Android 实现以 Kotlin 源码、README 和 [D5](decisions.md#d5--原生-android-现行实现) 为准。
+
 本规格从 `VeloTrack-h5/src/App.tsx` 反抽而来，作为 Flutter 端 1:1 还原的依据。所有未明示的视觉细节请回 h5 源码核对，**以 h5 为准**。
 
 ## 1. 视图状态机

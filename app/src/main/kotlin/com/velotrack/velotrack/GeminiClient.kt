@@ -9,6 +9,12 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
 import java.util.concurrent.TimeUnit
 
 object GeminiClient {
@@ -20,6 +26,7 @@ object GeminiClient {
     ) : IllegalStateException(message) {
         enum class Reason {
             MissingApiKey,
+            MissingModel,
             RateLimited,
             ServerRejected,
             EmptyResponse,
@@ -33,61 +40,57 @@ object GeminiClient {
         .callTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    /** Ordered by preference. Some API keys/projects may not have access to newer models. */
-    private val MODELS = listOf(
-        "gemini-3-flash-preview",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-8b",
-    )
-
-    fun generateContent(
+    suspend fun generateContent(
         apiKey: String,
         prompt: String,
         requestId: String = "manual",
         proxyUrl: String = "",
-    ): String {
-        Log.d(
-            LOG_TAG,
-            "generateContent enter requestId=$requestId models=${MODELS.joinToString()} " +
-                "apiKeyConfigured=${apiKey.isNotBlank()} proxyConfigured=${proxyUrl.isNotBlank()} promptChars=${prompt.length}",
-        )
+        model: String = BuildConfig.GEMINI_MODEL,
+    ): String = withTimeout(60_000L) {
         if (proxyUrl.isNotBlank()) {
-            return retryNetworkErrors(requestId, "proxy") {
+            return@withTimeout retryNetworkErrors(requestId, "proxy") {
                 executeProxy(proxyUrl, prompt, requestId)
             }
         }
-        if (apiKey.isBlank()) {
-            Log.w(LOG_TAG, "generateContent missing api key requestId=$requestId")
-            throw GeminiProxyException(
-                GeminiProxyException.Reason.MissingApiKey,
-                "AI_PROXY_FAILED: GEMINI_API_KEY is not configured",
-            )
+        if (apiKey.isBlank()) throw GeminiProxyException(
+            GeminiProxyException.Reason.MissingApiKey, "AI proxy or debug key is not configured")
+        if (model.isBlank() || !model.matches(Regex("[A-Za-z0-9._-]+"))) throw GeminiProxyException(
+            GeminiProxyException.Reason.MissingModel, "Configure GEMINI_MODEL for debug direct access")
+        retryNetworkErrors(requestId, model) {
+            executeGenerateContent(apiKey, prompt, requestId, model)
         }
-        var lastModelError: GeminiProxyException? = null
-        MODELS.forEachIndexed { index, model ->
-            try {
-                return retryNetworkErrors(requestId, model) {
-                    executeGenerateContent(apiKey, prompt, requestId, model)
-                }
-            } catch (error: GeminiProxyException) {
-                val canFallback = error.httpCode == 404 && error.errorStatus == "NOT_FOUND" && index < MODELS.lastIndex
-                Log.w(
-                    LOG_TAG,
-                    "model attempt failed requestId=$requestId model=$model reason=${error.reason} " +
-                        "httpCode=${error.httpCode ?: "-"} status=${error.errorStatus ?: "-"} willFallback=$canFallback",
-                )
-                if (!canFallback) throw error
-                lastModelError = error
-            }
-        }
-        throw lastModelError ?: GeminiProxyException(
-            GeminiProxyException.Reason.ServerRejected,
-            "AI_PROXY_FAILED: no Gemini model attempts were made",
-        )
     }
 
-    private fun executeProxy(proxyUrl: String, prompt: String, requestId: String): String {
+    private data class HttpResult(val code: Int, val raw: String) {
+        val isSuccessful: Boolean get() = code in 200..299
+    }
+
+    /** The response is consumed and closed before resuming; cancellation also aborts body reads. */
+    private suspend fun execute(request: Request): HttpResult = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                val result = runCatching {
+                    response.use {
+                        val body = response.body
+                        val source = body?.source()
+                        source?.request(MAX_RESPONSE_BYTES + 1)
+                        if ((source?.buffer?.size ?: 0L) > MAX_RESPONSE_BYTES) {
+                            throw GeminiProxyException(GeminiProxyException.Reason.ServerRejected, "AI response exceeds size limit")
+                        }
+                        HttpResult(response.code, body?.string().orEmpty())
+                    }
+                }
+                continuation.resumeWith(result)
+            }
+        })
+    }
+
+    private suspend fun executeProxy(proxyUrl: String, prompt: String, requestId: String): String {
         val bodyJson = JSONObject()
             .put("requestId", requestId)
             .put("prompt", prompt)
@@ -96,8 +99,8 @@ object GeminiClient {
             .url(proxyUrl)
             .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
-        client.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
+        execute(request).let { response ->
+            val raw = response.raw
             if (!response.isSuccessful) {
                 throw GeminiProxyException(
                     if (response.code == 429) GeminiProxyException.Reason.RateLimited
@@ -118,7 +121,7 @@ object GeminiClient {
         }
     }
 
-    private fun executeGenerateContent(apiKey: String, prompt: String, requestId: String, model: String): String {
+    private suspend fun executeGenerateContent(apiKey: String, prompt: String, requestId: String, model: String): String {
         val url =
             "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
         val bodyJson = JSONObject().apply {
@@ -140,8 +143,8 @@ object GeminiClient {
             .build()
         val startedAt = System.currentTimeMillis()
         Log.d(LOG_TAG, "http start requestId=$requestId model=$model requestChars=${bodyJson.length}")
-        client.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
+        execute(request).let { response ->
+            val raw = response.raw
             val elapsedMs = System.currentTimeMillis() - startedAt
             Log.d(
                 LOG_TAG,
@@ -188,7 +191,10 @@ object GeminiClient {
             val first = candidates.getJSONObject(0)
             val parts = first.optJSONObject("content")?.optJSONArray("parts")
             Log.d(LOG_TAG, "parse parts requestId=$requestId model=$model hasContent=${first.has("content")} partCount=${parts?.length() ?: 0}")
-            val text = parts?.optJSONObject(0)?.optString("text").orEmpty()
+            val text = (0 until (parts?.length() ?: 0)).mapNotNull { index ->
+                parts?.optJSONObject(index)?.takeUnless { it.optBoolean("thought") }
+                    ?.optString("text")?.takeIf { it.isNotBlank() }
+            }.joinToString("\n")
             if (text.isBlank()) {
                 Log.w(LOG_TAG, "empty model text requestId=$requestId model=$model")
                 throw GeminiProxyException(GeminiProxyException.Reason.EmptyResponse, "AI_PROXY_FAILED: Empty model text")
@@ -198,7 +204,7 @@ object GeminiClient {
         }
     }
 
-    private fun retryNetworkErrors(requestId: String, model: String, block: () -> String): String {
+    private suspend fun retryNetworkErrors(requestId: String, model: String, block: suspend () -> String): String {
         var lastError: IOException? = null
         repeat(2) { attempt ->
             try {
@@ -216,7 +222,7 @@ object GeminiClient {
                         "AI_PROXY_FAILED: Network request failed: ${e.message}",
                     )
                 }
-                Thread.sleep(350L)
+                delay(350L)
             }
         }
         throw GeminiProxyException(
@@ -229,5 +235,6 @@ object GeminiClient {
         JSONObject(raw).optJSONObject("error")?.optString("status")?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
+    private const val MAX_RESPONSE_BYTES = 1_048_576L
     private const val LOG_TAG = "VeloAI"
 }

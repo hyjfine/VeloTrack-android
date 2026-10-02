@@ -30,6 +30,8 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Navigation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -55,6 +57,9 @@ fun HistoryScreen(
     navBottom: androidx.compose.ui.unit.Dp,
     onOpenRide: (Ride) -> Unit,
     onRequestDelete: (String) -> Unit,
+    errorMessage: String? = null,
+    isLoading: Boolean = false,
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -86,7 +91,12 @@ fun HistoryScreen(
             )
         }
         Spacer(Modifier.height(36.dp))
-        if (rides.isEmpty()) {
+        if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        if (errorMessage != null) {
+            Text(errorMessage, color = VeloColors.danger)
+            TextButton(onClick = onRetry) { Text("重试") }
+        }
+        if (rides.isEmpty() && errorMessage == null && !isLoading) {
             VeloGlassSurface(
                 shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
                 baseColor = VeloColors.surfaceDarkSoft,
@@ -165,8 +175,7 @@ private fun HistoryRideRow(
         }
     }
     val movingDurationMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
-        val fromFilter = (ride.movingDurationSec * 1000).toLong()
-        if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
+        (ride.movingDurationSec * 1000).toLong().coerceAtLeast(0L)
     }
     VeloGlassSurface(
         shape = RoundedCornerShape(VeloDimens.radiusLg.dp),

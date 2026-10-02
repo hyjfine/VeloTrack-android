@@ -76,9 +76,7 @@ fun DetailScreen(
 ) {
     val scroll = rememberScrollState()
     var isMapTouching by remember { mutableStateOf(false) }
-    val mapPoints = remember(ride.id, ride.points.size) {
-        TrackDataFilter.filterForDisplay(ride.points)
-    }
+    val mapPoints = ride.presentation?.mapPoints.orEmpty()
     Column(
         modifier
             .fillMaxSize()
@@ -176,8 +174,7 @@ fun DetailScreen(
 @Composable
 private fun StatsGrid(ride: Ride) {
     val movingMs = remember(ride.id, ride.movingDurationSec, ride.endTime) {
-        val fromFilter = (ride.movingDurationSec * 1000).toLong()
-        if (fromFilter > 0L) fromFilter else ((ride.endTime ?: 0L) - ride.startTime).coerceAtLeast(0L)
+        (ride.movingDurationSec * 1000).toLong().coerceAtLeast(0L)
     }
     val cells = listOf(
         "Total Distance" to formatDistanceMeters(ride.totalDistance),
@@ -219,9 +216,7 @@ private fun RowScope.StatCell(label: String, value: String) {
 
 @Composable
 private fun PerformanceCard(ride: Ride) {
-    val chartSpeedsKmh = remember(ride.id, ride.points.size) {
-        RideStats.chartSpeedMps(ride.points).map { (it * 3.6).toFloat() }
-    }
+    val chart = ride.presentation?.chart.orEmpty()
     VeloGlassSurface(
         shape = RoundedCornerShape(VeloDimens.radiusXl.dp),
         baseColor = VeloColors.surfaceDarkSoft,
@@ -246,7 +241,7 @@ private fun PerformanceCard(ride: Ride) {
             }
             Spacer(Modifier.height(32.dp))
             PerformanceLineChart(
-                speedsKmh = chartSpeedsKmh,
+                points = chart,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(192.dp),
@@ -256,9 +251,9 @@ private fun PerformanceCard(ride: Ride) {
 }
 
 @Composable
-private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Modifier) {
+private fun PerformanceLineChart(points: List<RidePresentationData.ChartPoint>, modifier: Modifier = Modifier) {
     val density = LocalDensity.current
-    if (speedsKmh.isEmpty()) {
+    if (points.isEmpty()) {
         Box(modifier, contentAlignment = Alignment.Center) {
             Text("No samples", color = VeloColors.mutedText, fontSize = 12.sp)
         }
@@ -272,7 +267,7 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
             val padB = 8f
             val w = size.width - padL - padR
             val h = size.height - padT - padB
-            val maxV = (speedsKmh.maxOrNull() ?: 1f).coerceAtLeast(1f)
+            val maxV = (points.maxOfOrNull { it.speedKmh } ?: 1f).coerceAtLeast(1f)
             val minV = 0f
             val steps = 4
             for (i in 0..steps) {
@@ -285,12 +280,13 @@ private fun PerformanceLineChart(speedsKmh: List<Float>, modifier: Modifier = Mo
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f),
                 )
             }
-            if (speedsKmh.size >= 2) {
+            if (points.size >= 2) {
                 val path = Path()
-                speedsKmh.forEachIndexed { i, v ->
-                    val x = padL + w * i / (speedsKmh.size - 1)
-                    val y = padT + h * (1f - (v - minV) / (maxV - minV).coerceAtLeast(1e-3f))
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                val duration = points.last().elapsedMs.coerceAtLeast(1L)
+                points.forEachIndexed { i, point ->
+                    val x = padL + w * (point.elapsedMs.toDouble() / duration).toFloat()
+                    val y = padT + h * (1f - (point.speedKmh - minV) / (maxV - minV).coerceAtLeast(1e-3f))
+                    if (i == 0 || points[i - 1].segmentId != point.segmentId) path.moveTo(x, y) else path.lineTo(x, y)
                 }
                 drawPath(
                     path = path,
@@ -374,6 +370,9 @@ private fun AiCoachingCard(
                     }
                     errorMessage != null -> {
                         Text(errorMessage, color = VeloColors.danger, fontSize = 16.sp)
+                        Button(onClick = onAnalyze, modifier = Modifier.padding(top = 12.dp)) {
+                            Text("重试分析")
+                        }
                     }
                     else -> {
                         AiAnalysisMarkdown(aiAnalysis.orEmpty())

@@ -176,6 +176,48 @@ class RecordingLocationProcessorTest {
         assertTrue(result.state.livePoints.isEmpty())
     }
 
+    @Test fun signalRecoveryCanReanchorToConsistentNewArea() {
+        var state = RecordingSessionState(isRecording = true)
+        repeat(4) { state = apply(state, point(31.0 + it * 0.00003, 121.0, it)).state }
+        repeat(2) { state = apply(state, point(31.0, 121.0, it + 4).copy(accuracy = 50.0)).state }
+        val count = state.livePoints.size
+        repeat(5) { state = apply(state, point(31.1 + it * 0.00003, 121.0, it + 6)).state }
+        assertTrue(state.livePoints.size > count)
+        assertTrue(!state.trackPausedForSignal)
+        assertEquals(1, state.currentSegmentId)
+        assertTrue(state.displayDistanceM < 100.0)
+    }
+
+    @Test fun longLiveRouteRetainsItsBeginningAfterRepeatedSampling() {
+        var state = RecordingSessionState(isRecording = true)
+        repeat(6001) { state = apply(state, point(31.0 + it * 3.0 / 111194.9266, 121.0, it)).state }
+        val segments = TrackDataFilter.routeSegments(state.mapPoints)
+        assertEquals(1, segments.size)
+        assertEquals(state.livePoints.first(), segments.single().first())
+        assertEquals(state.livePoints.last(), segments.single().last())
+        assertEquals(TrackDataFilter.summarize(state.livePoints).totalDistanceM, state.displayDistanceM, 0.001)
+    }
+
+    @Test fun extremelyPoorFixesEnterSignalLoss() {
+        var state = RecordingSessionState(isRecording = true)
+        repeat(4) { state = apply(state, point(31.0 + it * 0.00003, 121.0, it)).state }
+        repeat(10) { state = apply(state, point(31.0, 121.0, it + 4).copy(accuracy = 300.0)).state }
+        assertTrue(state.signalLost)
+        assertEquals(0.0, state.currentSpeedMps, 0.001)
+    }
+
+    @Test fun amapFixFromPauseIsRejectedAfterResume() {
+        val result = RecordingLocationProcessor.apply(
+            state = RecordingSessionState(isRecording = true),
+            point = point(31.0, 121.0, 1).copy(fixMonotonicMs = 0L, source = GpsSource.AMAP_GPS),
+            recordingStartAt = 1_000_000L,
+            activeSegmentStartedAt = 1_010_000L,
+            isRecording = true, isPaused = false,
+        )
+        assertEquals("before active segment", result.state.lastLocationDropReason)
+        assertTrue(result.acceptedPoints.isEmpty())
+    }
+
     private fun apply(state: RecordingSessionState, point: GpsPoint): RecordingLocationProcessor.Result =
         RecordingLocationProcessor.apply(
             state = state,

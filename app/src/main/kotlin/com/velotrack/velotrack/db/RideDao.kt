@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 
 @Dao
 abstract class RideDao {
@@ -24,14 +25,23 @@ abstract class RideDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     protected abstract fun insertRideBlocking(entity: RideEntity)
 
+    @Upsert
+    protected abstract fun upsertRideBlocking(entity: RideEntity)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     protected abstract fun insertPointsBlocking(points: List<GpsPointEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    protected abstract fun ensureDraftBlocking(entity: RideEntity)
 
     @Query("DELETE FROM rides WHERE id = :id")
     protected abstract fun deleteRideByIdBlocking(id: String)
 
     @Query("DELETE FROM gps_points WHERE rideId = :rideId")
     protected abstract fun deletePointsByRideIdBlocking(rideId: String)
+
+    @Query("UPDATE rides SET activeDurationMs = :elapsedMs WHERE id = :rideId AND endTime IS NULL")
+    protected abstract fun updateCheckpointBlocking(rideId: String, elapsedMs: Long)
 
     @Transaction
     open fun saveRideWithPointsBlocking(entity: RideEntity, points: List<GpsPointEntity>) {
@@ -50,20 +60,22 @@ abstract class RideDao {
 
     @Transaction
     open fun insertDraftRideBlocking(entity: RideEntity) {
-        insertRideBlocking(entity)
+        // Retrying draft creation must not REPLACE the parent and cascade-delete its points.
+        ensureDraftBlocking(entity)
     }
 
     @Transaction
-    open fun appendPointsBlocking(rideId: String, points: List<GpsPointEntity>) {
+    open fun appendPointsBlocking(rideId: String, points: List<GpsPointEntity>, elapsedMs: Long) {
         if (points.isNotEmpty()) {
             insertPointsBlocking(points)
         }
+        updateCheckpointBlocking(rideId, elapsedMs)
     }
 
     @Transaction
     open fun finalizeRideBlocking(entity: RideEntity, points: List<GpsPointEntity>) {
-        deletePointsByRideIdBlocking(entity.id)
-        insertRideBlocking(entity)
+        // UPDATE preserves the acknowledged prefix and its foreign-key children.
+        upsertRideBlocking(entity)
         if (points.isNotEmpty()) {
             insertPointsBlocking(points)
         }

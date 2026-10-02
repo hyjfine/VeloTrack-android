@@ -8,7 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import org.json.JSONArray
 
-@Database(entities = [RideEntity::class, GpsPointEntity::class], version = 5, exportSchema = true)
+@Database(entities = [RideEntity::class, GpsPointEntity::class], version = 6, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun rideDao(): RideDao
 
@@ -22,12 +22,12 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "velotrack.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also { instance = it }
             }
 
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     """
@@ -60,7 +60,8 @@ abstract class AppDatabase : RoomDatabase() {
                         val rawPoints = cursor.getString(pointsJsonIndex).orEmpty()
                         if (rawPoints.isBlank()) continue
 
-                        val points = runCatching { JSONArray(rawPoints) }.getOrNull() ?: continue
+                        // Abort transaction on invalid legacy JSON, retaining the original data for recovery.
+                        val points = JSONArray(rawPoints)
                         for (i in 0 until points.length()) {
                             val point = points.optJSONObject(i) ?: continue
                             insertPoint.clearBindings()
@@ -153,6 +154,13 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE `gps_points` ADD COLUMN `monotonicMs` INTEGER NOT NULL DEFAULT 0",
                 )
+            }
+        }
+
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `rides` ADD COLUMN `activeDurationMs` INTEGER")
+                db.execSQL("ALTER TABLE `rides` ADD COLUMN `statsVersion` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

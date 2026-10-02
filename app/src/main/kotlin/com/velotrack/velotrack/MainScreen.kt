@@ -52,6 +52,7 @@ fun VeloMainScreen(
     onCancelDelete: () -> Unit,
     onAnalyze: () -> Unit,
     onBackDetail: () -> Unit,
+    onRetryHistory: () -> Unit = {},
     onToggleDebugLog: () -> Unit = {},
     onSaveDebugLog: () -> Unit = {},
 ) {
@@ -120,6 +121,9 @@ fun VeloMainScreen(
             )
             HistoryScreen(
                 rides = state.history,
+                errorMessage = state.historyError,
+                isLoading = state.isHistoryLoading || state.isDetailLoading,
+                onRetry = onRetryHistory,
                 navBottom = navBottom,
                 onOpenRide = onOpenRide,
                 onRequestDelete = onRequestDelete,

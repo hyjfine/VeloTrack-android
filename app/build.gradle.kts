@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.net.URI
 
 plugins {
     id("com.android.application")
@@ -36,11 +37,15 @@ android {
         applicationId = "com.velotrack.velotrack"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.1"
+        versionCode = providers.gradleProperty("VERSION_CODE").orElse("2").get().toInt()
+        versionName = "1.0.2"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 
         val geminiKey = secretProperty("GEMINI_API_KEY")
+        val geminiModel = secretProperty("GEMINI_MODEL")
+        require(geminiModel.isBlank() || geminiModel.matches(Regex("[A-Za-z0-9._-]+"))) { "Invalid GEMINI_MODEL name" }
+        buildConfigField("String", "GEMINI_MODEL", "\"$geminiModel\"")
         val aiProxyUrl = secretProperty("AI_PROXY_URL")
         val googleMapsKey = secretProperty("GOOGLE_MAPS_API_KEY")
         val amapKey = secretProperty("AMAP_API_KEY")
@@ -105,6 +110,33 @@ ksp {
     arg("room.incremental", "true")
 }
 
+val validateReleaseConfiguration by tasks.registering {
+    group = "verification"
+    description = "Validate signing, enabled map providers, AI proxy and release version before distribution."
+    doLast {
+        val required = mutableListOf("RELEASE_STORE_FILE", "RELEASE_STORE_PASSWORD", "RELEASE_KEY_ALIAS", "RELEASE_KEY_PASSWORD", "AI_PROXY_URL")
+        when (secretProperty("MAP_PROVIDER").uppercase()) {
+            "AMAP" -> required += "AMAP_API_KEY"
+            "GOOGLE", "GOOGLE_MAPS" -> required += "GOOGLE_MAPS_API_KEY"
+            else -> required += listOf("AMAP_API_KEY", "GOOGLE_MAPS_API_KEY")
+        }
+        val missing = required.filter { secretProperty(it).isBlank() }
+        check(missing.isEmpty()) { "Missing release configuration: ${missing.joinToString()}" }
+        check(rootProject.file(secretProperty("RELEASE_STORE_FILE")).isFile) { "Release keystore does not exist" }
+        val proxy = URI(secretProperty("AI_PROXY_URL"))
+        check(proxy.scheme == "https" && !proxy.host.isNullOrBlank()) { "Release AI proxy must use HTTPS" }
+        val previousCode = providers.gradleProperty("PREVIOUS_VERSION_CODE").orElse("0").get().toInt()
+        check(android.defaultConfig.versionCode!! > previousCode) { "VERSION_CODE must exceed PREVIOUS_VERSION_CODE" }
+    }
+}
+
+tasks.register("verifyReleaseReady") {
+    group = "verification"
+    description = "Validate release configuration and build a signed, shrunk bundle."
+    dependsOn(validateReleaseConfiguration, "bundleRelease")
+}
+tasks.matching { it.name == "bundleRelease" }.configureEach { mustRunAfter(validateReleaseConfiguration) }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
@@ -136,6 +168,8 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test:core:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

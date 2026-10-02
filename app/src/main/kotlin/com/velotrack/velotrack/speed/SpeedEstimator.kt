@@ -189,7 +189,19 @@ object SpeedEstimator {
                 segments.add(WeightedSpeed(v, 1.0 / (acc * acc)))
             }
         }
-        if (segments.isEmpty()) return DerivedSummary(null, 0)
+        if (segments.isEmpty()) {
+            // Slow motion may not clear the noise floor in one callback. Extend the baseline
+            // within the same contiguous window, instead of throwing away every small step.
+            for (i in points.size - 2 downTo 0) {
+                val candidate = points[i]
+                if (candidate.segmentId != newest.segmentId ||
+                    newestMono - monoOrTimestamp(candidate) > DERIVED_WINDOW_MS ||
+                    monoDtMs(candidate, points[i + 1]) !in 1..TrackingPolicy.MAX_CONTIGUOUS_SEGMENT_GAP_MS
+                ) break
+                segmentSpeedMps(candidate, newest)?.let { return DerivedSummary(it, 1) }
+            }
+            return DerivedSummary(null, 0)
+        }
         if (segments.size < DERIVED_MIN_SEGMENTS) {
             // 单段也允许，避免起步时一直没值
             return DerivedSummary(segments.first().mps, segments.size)

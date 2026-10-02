@@ -24,6 +24,8 @@ class RideRepository(
                 avgSpeed = ride.avgSpeed,
                 maxSpeed = ride.maxSpeed,
                 movingDurationSec = ride.movingDurationSec,
+                activeDurationMs = ride.activeDurationMs,
+                statsVersion = TrackDataFilter.STATS_VERSION,
             ),
             ride.points.mapIndexed { index, point ->
                 pointToEntity(ride.id, index, point)
@@ -46,21 +48,23 @@ class RideRepository(
                 avgSpeed = 0.0,
                 maxSpeed = 0.0,
                 movingDurationSec = 0.0,
+                activeDurationMs = 0L,
             ),
         )
     }
 
-    fun appendTrackPoints(rideId: String, startIndex: Int, points: List<GpsPoint>) {
-        if (points.isEmpty()) return
+    fun appendTrackPoints(rideId: String, startIndex: Int, points: List<GpsPoint>, elapsedMs: Long) {
         dao.appendPointsBlocking(
             rideId,
             points.mapIndexed { offset, point ->
                 pointToEntity(rideId, startIndex + offset, point)
             },
+            elapsedMs,
         )
     }
 
-    fun finalizeRide(ride: Ride) {
+    fun finalizeRide(ride: Ride, acknowledgedPointCount: Int = 0) {
+        require(acknowledgedPointCount in 0..ride.points.size)
         dao.finalizeRideBlocking(
             RideEntity(
                 id = ride.id,
@@ -71,8 +75,12 @@ class RideRepository(
                 avgSpeed = ride.avgSpeed,
                 maxSpeed = ride.maxSpeed,
                 movingDurationSec = ride.movingDurationSec,
+                activeDurationMs = ride.activeDurationMs,
+                statsVersion = TrackDataFilter.STATS_VERSION,
             ),
-            ride.points.mapIndexed { index, point -> pointToEntity(ride.id, index, point) },
+            ride.points.subList(acknowledgedPointCount, ride.points.size).mapIndexed { index, point ->
+                pointToEntity(ride.id, acknowledgedPointCount + index, point)
+            },
         )
     }
 
@@ -89,8 +97,8 @@ class RideRepository(
     fun repairHistoricalRides(): Int {
         var repaired = 0
         dao.getAllBlocking().forEach { entity ->
+            if (entity.statsVersion == TrackDataFilter.STATS_VERSION) return@forEach
             val original = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
-            if (original.isEmpty()) return@forEach
             val normalized = TrackDataFilter.withInferredSegments(original)
             val stats = TrackDataFilter.summarize(normalized)
             val segmentChanged = original.indices.any { original[it].segmentId != normalized[it].segmentId }
@@ -98,13 +106,14 @@ class RideRepository(
                 entity.avgSpeed != stats.avgSpeedMps ||
                 entity.maxSpeed != stats.maxSpeedMps ||
                 entity.movingDurationSec != stats.movingDurationSec
-            if (segmentChanged || summaryChanged) {
+            if (segmentChanged || summaryChanged || entity.statsVersion != TrackDataFilter.STATS_VERSION) {
                 dao.saveRideWithPointsBlocking(
                     entity.copy(
                         totalDistance = stats.totalDistanceM,
                         avgSpeed = stats.avgSpeedMps,
                         maxSpeed = stats.maxSpeedMps,
                         movingDurationSec = stats.movingDurationSec,
+                        statsVersion = TrackDataFilter.STATS_VERSION,
                     ),
                     normalized.mapIndexed { index, point -> pointToEntity(entity.id, index, point) },
                 )
@@ -117,9 +126,6 @@ class RideRepository(
     private fun entityToRide(entity: RideEntity): Ride {
         val points = dao.getPointsForRideBlocking(entity.id).map(::pointEntityToModel)
         val stats = if (points.isNotEmpty()) TrackDataFilter.summarize(points) else null
-        val wallDurationSec = entity.endTime?.let { end ->
-            ((end - entity.startTime).coerceAtLeast(0L) / 1000.0)
-        } ?: 0.0
         return Ride(
             id = entity.id,
             title = entity.title,
@@ -129,16 +135,14 @@ class RideRepository(
             totalDistance = stats?.totalDistanceM ?: entity.totalDistance,
             avgSpeed = stats?.avgSpeedMps ?: entity.avgSpeed,
             maxSpeed = stats?.maxSpeedMps ?: entity.maxSpeed,
-            movingDurationSec = stats?.movingDurationSec?.takeIf { it > 0.0 }
-                ?: entity.movingDurationSec.takeIf { it > 0.0 }
-                ?: wallDurationSec,
+            movingDurationSec = stats?.movingDurationSec ?: entity.movingDurationSec,
+            activeDurationMs = entity.activeDurationMs,
+            statsVersion = if (stats != null) TrackDataFilter.STATS_VERSION else entity.statsVersion,
+            presentation = RidePresentationData.build(points, stats ?: TrackDataFilter.summarize(points)),
         )
     }
 
     private fun entityToSummaryRide(entity: RideEntity): Ride {
-        val wallDurationSec = entity.endTime?.let { end ->
-            ((end - entity.startTime).coerceAtLeast(0L) / 1000.0)
-        } ?: 0.0
         return Ride(
             id = entity.id,
             title = entity.title,
@@ -148,7 +152,9 @@ class RideRepository(
             totalDistance = entity.totalDistance,
             avgSpeed = entity.avgSpeed,
             maxSpeed = entity.maxSpeed,
-            movingDurationSec = entity.movingDurationSec.takeIf { it > 0.0 } ?: wallDurationSec,
+            movingDurationSec = entity.movingDurationSec,
+            activeDurationMs = entity.activeDurationMs,
+            statsVersion = entity.statsVersion,
         )
     }
 

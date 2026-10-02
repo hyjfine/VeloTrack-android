@@ -1,5 +1,7 @@
 # 路线图
 
+> 历史跨端设计参考：其中 Flutter/Pigeon/Carto 等描述不代表本仓库现状。当前 Android 实现以 Kotlin 源码、README 和 [D5](decisions.md#d5--原生-android-现行实现) 为准。
+
 基于 4 个已决策（见 `decisions.md`）：`flutter_map` / 原生 AI 代理 / 仅前台 / 不迁历史数据。
 
 ## 阶段划分

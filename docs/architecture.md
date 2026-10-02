@@ -1,5 +1,7 @@
 # 架构总览
 
+> 历史跨端设计参考：其中 Flutter/Pigeon/Carto 等描述不代表本仓库现状。当前 Android 实现以 Kotlin 源码、README 和 [D5](decisions.md#d5--原生-android-现行实现) 为准。
+
 ## 分层
 
 ```

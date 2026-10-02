@@ -147,6 +147,39 @@ class TrackDataFilterTest {
         assertEquals(listOf(normalized.first(), normalized.last()), TrackDataFilter.filterForDisplay(normalized))
     }
 
+    @Test fun slowMotionAccumulatesDistanceAcrossSmallSteps() {
+        for (accuracy in listOf(3.0, 10.0, 15.0)) {
+            val points = (0..100).map { i ->
+                point(31.0 + i * 1.2 / 111194.9266, 121.0, i).copy(
+                    timestamp = 1_000_000L + i * 1200L, monotonicMs = 10_000L + i * 1200L,
+                    speedMps = 1.0, accuracy = accuracy)
+            }
+            val summary = TrackDataFilter.summarize(points)
+            assertEquals(120.0, summary.totalDistanceM, 5.0)
+            assertEquals(summary.totalDistanceM, TrackDataFilter.distanceState(points).totalDistanceM, 0.001)
+            assertTrue(summary.movingDurationSec >= 115.0)
+        }
+    }
+
+    @Test fun stationaryJitterDoesNotAccumulatePathLength() {
+        val points = (0..100).map { i -> point(31.0 + (i % 2) * 0.5 / 111194.9266, 121.0, i) }
+        assertEquals(0.0, TrackDataFilter.summarize(points).totalDistanceM, 0.001)
+    }
+
+    @Test fun samplingPreservesContinuityAndRealPauseBoundaries() {
+        val points = (0..20_000).map { i ->
+            point(31.0 + i * 3.0 / 111194.9266, 121.0, i).copy(segmentId = if (i < 10000) 0 else 1)
+        }
+        val sampled = TrackDataFilter.downsampleForMap(points)
+        val segments = TrackDataFilter.routeSegments(sampled)
+        assertEquals(2, segments.size)
+        assertTrue(segments.all { it.size >= 2 })
+        assertEquals(points.first(), segments.first().first())
+        assertEquals(points[9999], segments.first().last())
+        assertEquals(points[10000], segments.last().first())
+        assertEquals(points.last(), segments.last().last())
+    }
+
     private fun point(lat: Double, lng: Double, second: Int): GpsPoint =
         GpsPoint(
             lat = lat,

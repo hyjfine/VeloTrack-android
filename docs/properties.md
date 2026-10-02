@@ -4,5 +4,6 @@
 GOOGLE_MAPS_API_KEY=your_google_maps_key
 AMAP_API_KEY=your_amap_key
 GEMINI_API_KEY=debug_only_gemini_key
+GEMINI_MODEL=configure_an_available_model_for_debug_direct_access
 AI_PROXY_URL=https://your-service.example.com/analyze
 MAP_PROVIDER=AMAP|GOOGLE
