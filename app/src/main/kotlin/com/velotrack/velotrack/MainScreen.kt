@@ -121,7 +121,7 @@ fun VeloMainScreen(
             )
             HistoryScreen(
                 rides = state.history,
-                errorMessage = state.historyError,
+                errorMessage = state.detailError ?: state.historyError,
                 isLoading = state.isHistoryLoading || state.isDetailLoading,
                 onRetry = onRetryHistory,
                 navBottom = navBottom,

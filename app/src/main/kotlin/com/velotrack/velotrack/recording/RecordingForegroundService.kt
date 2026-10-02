@@ -9,7 +9,7 @@ import com.velotrack.velotrack.VeloApp
 class RecordingForegroundService : Service() {
 
     private val manager: RecordingSessionManager
-        get() = VeloApp.instance.recordingManager
+        get() = (application as VeloApp).recordingManager
 
     override fun onBind(intent: Intent?): IBinder? = null
 

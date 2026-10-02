@@ -25,17 +25,13 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.velotrack.velotrack.db.AppDatabase
 import com.velotrack.velotrack.recording.RecordingNotificationHelper
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: TrackViewModel by viewModels {
-        TrackViewModel.factory(
-            application,
-            RideRepository(AppDatabase.get(this).rideDao()),
-        )
+        TrackViewModelFactory(application as VeloApp)
     }
 
     private val mapProvider: MapProvider by lazy { MapProviderSelector.select() }

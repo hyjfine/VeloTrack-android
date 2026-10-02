@@ -7,6 +7,7 @@ import com.amap.api.location.AMapLocationClient
 import com.amap.api.maps.MapsInitializer
 import com.velotrack.velotrack.db.AppDatabase
 import com.velotrack.velotrack.recording.RecordingSessionManager
+import com.velotrack.velotrack.recording.androidRecordingDependencies
 
 /**
  * 高德地图 SDK 8.1+ 要求：在调用任何地图相关接口前完成隐私合规声明，否则国内常见表现为白屏、瓦片不加载。
@@ -16,19 +17,25 @@ class VeloApp : Application() {
 
     lateinit var recordingManager: RecordingSessionManager
         private set
+    lateinit var rideRepository: RideRepository
+        private set
+    lateinit var historyMaintenance: HistoryMaintenance
+        private set
+    lateinit var debugLogs: TrackDebugLogs
+        private set
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         if (isPrivacyAccepted()) {
             initializeMapPrivacySdk()
         }
 
-        val repo = RideRepository(AppDatabase.get(this).rideDao())
+        rideRepository = RideRepository(AppDatabase.get(this).rideDao())
+        historyMaintenance = AndroidHistoryMaintenance(this, rideRepository)
+        debugLogs = AndroidTrackDebugLogs(this)
         recordingManager = RecordingSessionManager(
-            applicationContext,
-            repo,
-            MapProviderSelector.select(),
+            rideRepository,
+            androidRecordingDependencies(this, MapProviderSelector.select()),
         )
     }
 
@@ -58,8 +65,6 @@ class VeloApp : Application() {
     companion object {
         private const val PRIVACY_PREFS = "privacy_consent"
         private const val KEY_PRIVACY_ACCEPTED = "accepted_v1"
-        lateinit var instance: VeloApp
-            private set
     }
 }
 

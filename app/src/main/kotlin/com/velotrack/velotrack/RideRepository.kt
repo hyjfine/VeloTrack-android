@@ -7,11 +7,11 @@ import com.velotrack.velotrack.speed.TrackDataFilter
 
 class RideRepository(
     private val dao: RideDao,
-) {
+) : RideHistoryStore, RecordingRideStore {
     /** 历史列表只读取 rides 摘要，不触发每条骑行的 gps_points 查询。 */
-    fun listRides(): List<Ride> = dao.getAllBlocking().map(::entityToSummaryRide)
+    override fun listRides(): List<Ride> = dao.getAllBlocking().map(::entityToSummaryRide)
 
-    fun getRide(id: String): Ride? = dao.getByIdBlocking(id)?.let(::entityToRide)
+    override fun getRide(id: String): Ride? = dao.getByIdBlocking(id)?.let(::entityToRide)
 
     fun saveRide(ride: Ride) {
         dao.saveRideWithPointsBlocking(
@@ -33,11 +33,11 @@ class RideRepository(
         )
     }
 
-    fun deleteRide(id: String) {
+    override fun deleteRide(id: String) {
         dao.deleteByIdBlocking(id)
     }
 
-    fun beginDraftRide(rideId: String, title: String, startTime: Long) {
+    override fun beginDraftRide(rideId: String, title: String, startTime: Long) {
         dao.insertDraftRideBlocking(
             RideEntity(
                 id = rideId,
@@ -53,7 +53,7 @@ class RideRepository(
         )
     }
 
-    fun appendTrackPoints(rideId: String, startIndex: Int, points: List<GpsPoint>, elapsedMs: Long) {
+    override fun appendTrackPoints(rideId: String, startIndex: Int, points: List<GpsPoint>, elapsedMs: Long) {
         dao.appendPointsBlocking(
             rideId,
             points.mapIndexed { offset, point ->
@@ -63,7 +63,7 @@ class RideRepository(
         )
     }
 
-    fun finalizeRide(ride: Ride, acknowledgedPointCount: Int = 0) {
+    override fun finalizeRide(ride: Ride, acknowledgedPointCount: Int) {
         require(acknowledgedPointCount in 0..ride.points.size)
         dao.finalizeRideBlocking(
             RideEntity(
@@ -88,13 +88,13 @@ class RideRepository(
         dao.deleteByIdBlocking(id)
     }
 
-    fun getActiveDraftRide(): Ride? =
+    override fun getActiveDraftRide(): Ride? =
         dao.getActiveDraftRideBlocking()?.let { entity ->
             entityToRide(entity)
         }
 
     /** 一次性重算旧骑行：切断不可能跨段，并同步修复持久化摘要。 */
-    fun repairHistoricalRides(): Int {
+    override fun repairHistoricalRides(): Int {
         var repaired = 0
         dao.getAllBlocking().forEach { entity ->
             if (entity.statsVersion == TrackDataFilter.STATS_VERSION) return@forEach
@@ -107,7 +107,7 @@ class RideRepository(
                 entity.maxSpeed != stats.maxSpeedMps ||
                 entity.movingDurationSec != stats.movingDurationSec
             if (segmentChanged || summaryChanged || entity.statsVersion != TrackDataFilter.STATS_VERSION) {
-                dao.saveRideWithPointsBlocking(
+                val updated = dao.repairRideWithPointsBlocking(
                     entity.copy(
                         totalDistance = stats.totalDistanceM,
                         avgSpeed = stats.avgSpeedMps,
@@ -115,9 +115,10 @@ class RideRepository(
                         movingDurationSec = stats.movingDurationSec,
                         statsVersion = TrackDataFilter.STATS_VERSION,
                     ),
-                    normalized.mapIndexed { index, point -> pointToEntity(entity.id, index, point) },
+                    expectedStatsVersion = entity.statsVersion,
+                    points = normalized.mapIndexed { index, point -> pointToEntity(entity.id, index, point) },
                 )
-                repaired++
+                if (updated) repaired++
             }
         }
         return repaired

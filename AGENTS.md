@@ -13,7 +13,7 @@
 | 层级 | 技术 |
 |------|------|
 | UI | Jetpack Compose (Material3)、`VeloTheme` / `VeloColors` |
-| 状态 | `TrackViewModel` + `StateFlow<TrackUiState>` |
+| 状态 | `TrackViewModel` + `StateFlow<TrackUiState>`；构造注入存储、录制控制、AI、历史维护和日志 |
 | 定位 | `LocationTracker`（国内高德定位 / 海外 GMS Fused） |
 | 地图 | `MapPane`：国内 `AMAP`，海外 `Google Maps`（`MapProviderSelector`） |
 | 持久化 | Room（`rides` + `gps_points`） |
@@ -26,13 +26,15 @@
 app/src/main/kotlin/com/velotrack/velotrack/
 ├── MainActivity.kt          # 入口：权限、定位订阅、保屏、Compose 根
 ├── MainScreen.kt            # 三视图壳 + 转场动画
-├── TrackViewModel.kt        # 录制/暂停/计时/历史/删除/AI 状态机
+├── TrackViewModel.kt        # 倒计时/历史/导航/删除/AI 状态；收集应用级录制会话
+├── TrackDependencies.kt     # 界面状态管理依赖契约
+├── AndroidTrackDependencies.kt # 平台适配和 ViewModel factory
 ├── TrackModels.kt           # GpsPoint、Ride、AppView
 ├── LocationTracker.kt       # 定位采集与丢点策略
 ├── MapPane.kt               # 双地图实现与轨迹 Polyline
 ├── MapProviderSelector.kt   # CN → 高德，否则 Google
 ├── CoordinateTransform.kt   # WGS-84 ↔ GCJ-02（仅地图渲染）
-├── RideRepository.kt        # Room 读写
+├── RideRepository.kt        # Room 读写；实现 RideStore.kt 的历史/录制存储契约
 ├── GeminiClient.kt          # Gemini API
 ├── recording/               # 前台服务、录制会话、通知
 ├── VeloApp.kt               # Application + RecordingSessionManager
@@ -48,7 +50,7 @@ scripts/build_flutter_aar.sh # 历史脚本，当前工程无 Flutter 依赖
 
 ## 核心数据流
 
-1. **录制**：`RecordingScreen` → `onStartRecording` → 权限 → `beginStartCountdown` → `startRecording` → `LocationTracker` 推点 → `TrackViewModel.onLocation` → `livePoints` + 距离/速度统计。
+1. **录制**：`RecordingScreen` → 权限 → `TrackViewModel.beginStartCountdown` → `RecordingController.startRecording` → `RecordingSessionManager` 通过定位适配器收点 → `livePoints` + 距离/速度统计。`TrackViewModel.onLocation` 仅处理倒计时预热预览。
 2. **停止**：长按 1.5s（`HoldProgressOverlay`）→ `stopRecording` → `RideRepository` 落库 → 切 `AppView.DETAIL`。
 3. **后台录制**：`RecordingForegroundService`（`foregroundServiceType=location`）+ `RecordingSessionManager`；切后台仍记轨迹，通知栏可暂停/停止。倒计时预热仍由 Activity 的 `prewarmLocationTracker` 负责。
 4. **坐标**：存储与统计一律 **WGS-84**；高德底图仅在 `MapPane` / `CoordinateTransform` 渲染时转 GCJ-02。
@@ -94,6 +96,8 @@ MAP_PROVIDER=AMAP|GOOGLE    # 可选，覆盖区域自动选择
 4. **Room**：schema 变更需 bump `AppDatabase` version 并保留 `app/schemas/` 导出。
 5. **ProGuard**：release 已开启混淆；新增反射/序列化类需更新 `proguard-rules.pro`。
 6. **语言**：用户可见文案与注释可用中文；包名与 API 保持英文。
+7. **依赖与生命周期**：`VeloApp` 组装应用级 Repository / Manager / 历史维护 / 日志；Activity 用 `TrackViewModelFactory`。录制平台调用放入 `AndroidRecordingDependencies`，业务时间从注入的时钟获取。ViewModel 清理只能取消自己的工作，不能关闭应用级 Manager。
+8. **状态回归**：异步导航、删除、AI、定位和写库故障使用注入的 fake 与 `kotlinx-coroutines-test` 控制时序；不要通过降低定位过滤阈值让测试输入通过。数据库事务语义由 `androidTest` 实际执行验证。
 
 ## 常用命令
 

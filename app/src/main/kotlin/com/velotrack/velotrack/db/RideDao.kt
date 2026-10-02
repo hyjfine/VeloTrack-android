@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import androidx.room.Upsert
 
 @Dao
@@ -28,6 +29,9 @@ abstract class RideDao {
     @Upsert
     protected abstract fun upsertRideBlocking(entity: RideEntity)
 
+    @Update
+    protected abstract fun updateRideBlocking(entity: RideEntity)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     protected abstract fun insertPointsBlocking(points: List<GpsPointEntity>)
 
@@ -50,6 +54,32 @@ abstract class RideDao {
         if (points.isNotEmpty()) {
             insertPointsBlocking(points)
         }
+    }
+
+    /** 修复计算在事务外完成；写回前拒绝已删除或已被其他任务更新的旧快照。 */
+    @Transaction
+    open fun repairRideWithPointsBlocking(
+        entity: RideEntity,
+        expectedStatsVersion: Int,
+        points: List<GpsPointEntity>,
+    ): Boolean {
+        val current = getByIdBlocking(entity.id) ?: return false
+        if (current.endTime == null || current.endTime != entity.endTime ||
+            current.statsVersion != expectedStatsVersion
+        ) return false
+
+        updateRideBlocking(
+            current.copy(
+                totalDistance = entity.totalDistance,
+                avgSpeed = entity.avgSpeed,
+                maxSpeed = entity.maxSpeed,
+                movingDurationSec = entity.movingDurationSec,
+                statsVersion = entity.statsVersion,
+            ),
+        )
+        deletePointsByRideIdBlocking(entity.id)
+        if (points.isNotEmpty()) insertPointsBlocking(points)
+        return true
     }
 
     @Transaction

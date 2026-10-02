@@ -1,6 +1,9 @@
 package com.velotrack.velotrack.debug
 
 import android.os.SystemClock
+import com.velotrack.velotrack.DebugLogState
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -18,20 +21,20 @@ object DebugLogRecorder {
     var isRecording: Boolean = false
         private set
 
-    /** UI 刷新回调（主线程调用方负责切线程）。 */
-    var onStateChanged: (() -> Unit)? = null
+    private val _state = MutableStateFlow(DebugLogState())
+    val state = _state.asStateFlow()
 
     val lineCount: Int
-        get() = lines.size
+        get() = synchronized(lines) { lines.size }
 
-    fun start() {
+    fun start() = synchronized(lines) {
         lines.clear()
         isRecording = true
         append("META", "log started")
         notifyChanged()
     }
 
-    fun stop() {
+    fun stop() = synchronized(lines) {
         if (!isRecording) return
         append("META", "log stopped lines=$lineCount")
         isRecording = false
@@ -45,21 +48,22 @@ object DebugLogRecorder {
 
     fun append(tag: String, message: String) {
         if (!isRecording) return
-        val ts = timeFormat.format(Date())
-        val elapsed = SystemClock.elapsedRealtime()
-        val line = "$ts +${elapsed}ms $tag  $message"
         synchronized(lines) {
+            if (!isRecording) return
+            val ts = timeFormat.format(Date())
+            val elapsed = SystemClock.elapsedRealtime()
+            val line = "$ts +${elapsed}ms $tag  $message"
             lines.addLast(line)
             while (lines.size > MAX_LINES) {
                 lines.removeFirst()
             }
+            notifyChanged()
         }
-        notifyChanged()
     }
 
     fun snapshot(): List<String> = synchronized(lines) { lines.toList() }
 
     private fun notifyChanged() {
-        onStateChanged?.invoke()
+        _state.value = DebugLogState(isRecording, lines.size)
     }
 }

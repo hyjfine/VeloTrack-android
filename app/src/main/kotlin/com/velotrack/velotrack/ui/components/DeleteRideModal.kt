@@ -57,7 +57,7 @@ fun DeleteRideModal(
                 Modifier
                     .fillMaxSize()
                     .background(VeloColors.overlay)
-                    .tapFeedbackClickable { onCancel() },
+                    .tapFeedbackClickable(enabled = !isDeleting) { onCancel() },
             )
             Card(
                 shape = RoundedCornerShape(VeloDimens.radiusXl.dp),

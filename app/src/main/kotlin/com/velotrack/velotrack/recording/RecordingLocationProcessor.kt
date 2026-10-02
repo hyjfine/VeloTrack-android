@@ -39,11 +39,14 @@ object RecordingLocationProcessor {
         isRecording: Boolean,
         isPaused: Boolean,
         segmentStartIndex: Int = 0,
+        currentTimeMs: Long = System.currentTimeMillis(),
+        elapsedRealtimeMs: Long = android.os.SystemClock.elapsedRealtime(),
     ): Result {
         val rawSpeed = point.speedMps
         val speedSourceLabel = point.source.label + if (point.isGpsFix) "*" else ""
 
-        val freshnessDropReason = freshnessDropReason(point, recordingStartAt, recordingStartMonotonicMs, activeSegmentStartedAt)
+        val freshnessDropReason = freshnessDropReason(point, recordingStartAt, recordingStartMonotonicMs,
+            activeSegmentStartedAt, currentTimeMs, elapsedRealtimeMs)
         if (freshnessDropReason != null) {
             return Result(
                 state.copy(
@@ -284,6 +287,8 @@ object RecordingLocationProcessor {
         recordingStartAt: Long,
         recordingStartMonotonicMs: Long,
         activeSegmentStartedAt: Long,
+        currentTimeMs: Long,
+        elapsedRealtimeMs: Long,
     ): String? {
         if (point.isCached) return "cached location"
         val hasComparableMonotonicTime = recordingStartMonotonicMs > 0L && point.fixMonotonicMs > 0L
@@ -293,15 +298,15 @@ object RecordingLocationProcessor {
             // Location.time 与系统壁钟都会受手动校时/NTP 回拨影响，仅在缺少单调时间时兜底。
             if (point.timestamp < recordingStartAt && activeSegmentStartedAt == recordingStartAt) return "before recording start"
             if (point.timestamp < activeSegmentStartedAt) return "before active segment"
-            if (recordingStartMonotonicMs > 0L && System.currentTimeMillis() - point.timestamp > CALLBACK_MAX_AGE_MS) {
+            if (recordingStartMonotonicMs > 0L && currentTimeMs - point.timestamp > CALLBACK_MAX_AGE_MS) {
                 return "stale location timestamp"
             }
-            if (point.timestamp > System.currentTimeMillis() + FUTURE_TIMESTAMP_TOLERANCE_MS) {
+            if (point.timestamp > currentTimeMs + FUTURE_TIMESTAMP_TOLERANCE_MS) {
                 return "future location timestamp"
             }
         }
         if (recordingStartMonotonicMs > 0L && point.receivedMonotonicMs > 0L) {
-            val callbackAgeMs = android.os.SystemClock.elapsedRealtime() - point.receivedMonotonicMs
+            val callbackAgeMs = elapsedRealtimeMs - point.receivedMonotonicMs
             if (callbackAgeMs !in 0..CALLBACK_MAX_AGE_MS) return "stale callback"
         }
         return null
