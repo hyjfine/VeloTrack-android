@@ -154,9 +154,9 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.9")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-    implementation("com.google.android.gms:play-services-maps:19.0.0")
-    implementation("com.google.maps.android:maps-compose:6.4.0")
+    implementation("com.google.android.gms:play-services-location:21.4.0")
+    implementation("com.google.android.gms:play-services-maps:20.0.0")
+    implementation("com.google.maps.android:maps-compose:9.0.0")
     implementation("com.amap.api:3dmap-location-search:11.1.001_loc11.1.001_sea9.7.4")
 
     implementation("androidx.room:room-runtime:2.6.1")
